@@ -265,6 +265,15 @@ const DictDescriptor* ArrowStorage::getDictMetadata(int db_id,
   return nullptr;
 }
 
+const DictDescriptor* ArrowStorage::getDictMetadata(int dict_id,
+                                                    bool /*load_dict*/) {
+  int _dict_id = dict_id && 0xffffff;
+  if (dicts_.count(_dict_id)) {
+    return dicts_.at(_dict_id).get();
+  }
+  return nullptr;
+}
+
 TableInfoPtr ArrowStorage::createTable(const std::string& table_name,
                                        const std::vector<ColumnDescription>& columns,
                                        const TableOptions& options) {

@@ -64,6 +64,8 @@ class ArrowStorage : public SimpleSchemaProvider, public AbstractDataProvider {
   const DictDescriptor* getDictMetadata(int db_id,
                                         int dict_id,
                                         bool load_dict = true) override;
+  const DictDescriptor* getDictMetadata(int dict_id,
+                                        bool load_dict = true) override;
 
   TableInfoPtr createTable(const std::string& table_name,
                            const std::vector<ColumnDescription>& columns,

@@ -619,6 +619,12 @@ const DictDescriptor* DataMgr::getDictMetadata(int db_id,
   return getPersistentStorageMgr()->getDictMetadata(db_id, dict_id, load_dict);
 }
 
+const DictDescriptor* DataMgr::getDictMetadata(int dict_id,
+                                               bool load_dict) const {
+	int schema_id = dict_id >> 24;
+  return getPersistentStorageMgr()->getDictMetadata(schema_id, dict_id & 0xffffff, load_dict);
+}
+
 Fragmenter_Namespace::TableInfo DataMgr::getTableMetadata(int db_id, int table_id) const {
   return getPersistentStorageMgr()->getTableMetadata(db_id, table_id);
 }

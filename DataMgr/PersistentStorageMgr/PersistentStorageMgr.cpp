@@ -159,6 +159,12 @@ const DictDescriptor* PersistentStorageMgr::getDictMetadata(int db_id,
   return getStorageMgr(db_id)->getDictMetadata(db_id, dict_id, load_dict);
 }
 
+const DictDescriptor* PersistentStorageMgr::getDictMetadata(int dict_id,
+		                                            bool load_dict) {
+  int schema_id = dict_id >> 24;
+  return getStorageMgr(schema_id)->getDictMetadata(schema_id, dict_id & 0xffffff, load_dict);
+}
+
 Fragmenter_Namespace::TableInfo PersistentStorageMgr::getTableMetadata(
     int db_id,
     int table_id) const {

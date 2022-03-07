@@ -161,6 +161,12 @@ class BufferMgr : public AbstractBufferMgr {  // implements
     UNREACHABLE();
     return nullptr;
   }
+  const DictDescriptor* getDictMetadata(int dict_id,
+                                        bool load_dict = true) override {
+    UNREACHABLE();
+    return nullptr;
+  }
+  
 
   Fragmenter_Namespace::TableInfo getTableMetadata(int db_id,
                                                    int table_id) const override {

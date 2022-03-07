@@ -102,8 +102,7 @@ namespace Catalog_Namespace {
 const int DEFAULT_INITIAL_VERSION = 1;  // start at version 1
 const int MAPD_TEMP_TABLE_START_ID =
     1073741824;  // 2^30, give room for over a billion non-temp tables
-const int MAPD_TEMP_DICT_START_ID =
-    1073741824;  // 2^30, give room for over a billion non-temp dictionaries
+const int MAPD_TEMP_DICT_START_ID = 0x800000;  // 2^23
 
 thread_local bool Catalog::thread_holds_read_lock = false;
 

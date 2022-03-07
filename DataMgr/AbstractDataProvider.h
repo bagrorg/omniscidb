@@ -104,6 +104,13 @@ class AbstractDataProvider : public Data_Namespace::AbstractBufferMgr {
     return nullptr;
   }
 
+  const DictDescriptor* getDictMetadata(int dict_id,
+                                        bool load_dict = true) override {
+    UNREACHABLE();
+    return nullptr;
+  }
+
+
   Data_Namespace::AbstractBuffer* alloc(const size_t numBytes = 0) override {
     UNREACHABLE();
     return nullptr;

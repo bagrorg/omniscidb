@@ -193,6 +193,11 @@ class GlobalFileMgr : public AbstractBufferMgr {  // implements
   const DictDescriptor* getDictMetadata(int db_id,
                                         int dict_id,
                                         bool load_dict = true) override;
+  const DictDescriptor* getDictMetadata(int dict_id,
+                                        bool load_dict = true) override {
+	  UNREACHABLE();
+	  return nullptr;
+  }
 
   Fragmenter_Namespace::TableInfo getTableMetadata(int db_id,
                                                    int table_id) const override;

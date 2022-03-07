@@ -104,6 +104,8 @@ class AbstractBufferMgr {
   virtual const DictDescriptor* getDictMetadata(int db_id,
                                                 int dict_id,
                                                 bool load_dict = true) = 0;
+  virtual const DictDescriptor* getDictMetadata(int dict_id,
+                                                bool load_dict = true) = 0;
 
   virtual Fragmenter_Namespace::TableInfo getTableMetadata(int db_id,
                                                            int table_id) const = 0;
