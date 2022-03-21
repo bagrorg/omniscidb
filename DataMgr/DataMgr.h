@@ -246,9 +246,6 @@ class DataMgr {
                                         int dict_id,
                                         bool load_dict = true) const;
 
-  const DictDescriptor* getDictMetadata(int dict_id,
-		                        bool load_dict = true) const;
-
   Fragmenter_Namespace::TableInfo getTableMetadata(int db_id, int table_id) const;
 
   BufferProvider* getBufferProvider() const { return buffer_provider_.get(); }

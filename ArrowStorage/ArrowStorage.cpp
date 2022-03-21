@@ -255,21 +255,9 @@ Fragmenter_Namespace::TableInfo ArrowStorage::getEmptyTableMetadata(int table_id
   return res;
 }
 
-const DictDescriptor* ArrowStorage::getDictMetadata(int db_id,
-                                                    int dict_id,
-                                                    bool /*load_dict*/) {
-  CHECK_EQ(db_id, db_id_);
+const DictDescriptor* ArrowStorage::getDictMetadata(int dict_id) {
   if (dicts_.count(dict_id)) {
     return dicts_.at(dict_id).get();
-  }
-  return nullptr;
-}
-
-const DictDescriptor* ArrowStorage::getDictMetadata(int dict_id,
-                                                    bool /*load_dict*/) {
-  int _dict_id = dict_id && 0xffffff;
-  if (dicts_.count(_dict_id)) {
-    return dicts_.at(_dict_id).get();
   }
   return nullptr;
 }
@@ -297,7 +285,7 @@ TableInfoPtr ArrowStorage::createTable(const std::string& table_name,
         if (sharing_id < 0 && dict_ids.count(sharing_id)) {
           type.set_comp_param(dict_ids.at(sharing_id));
         } else {
-          int dict_id = next_dict_id_++;
+          int dict_id = (schema_id_ << 24) | next_dict_id_++;
           auto dict_desc = std::make_unique<DictDescriptor>(
               db_id_, dict_id, col.name, 32, true, 1, table_name, true);
           dict_desc->stringDict = std::make_shared<StringDictionary>(
