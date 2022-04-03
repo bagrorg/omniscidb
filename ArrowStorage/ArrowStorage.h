@@ -52,7 +52,9 @@ class ArrowStorage : public SimpleSchemaProvider, public AbstractDataProvider {
   };
 
   ArrowStorage(int schema_id, const std::string& schema_name, int db_id)
-      : SimpleSchemaProvider(schema_id, schema_name), db_id_(db_id), schema_id_(schema_id) {}
+      : SimpleSchemaProvider(schema_id, schema_name)
+      , db_id_(db_id)
+      , schema_id_(schema_id) {}
 
   void fetchBuffer(const ChunkKey& key,
                    Data_Namespace::AbstractBuffer* dest,
@@ -61,7 +63,7 @@ class ArrowStorage : public SimpleSchemaProvider, public AbstractDataProvider {
   Fragmenter_Namespace::TableInfo getTableMetadata(int db_id,
                                                    int table_id) const override;
 
-  const DictDescriptor* getDictMetadata(int dict_id);
+  const DictDescriptor* getDictMetadata(int dict_id, bool load_dict = false);
 
   TableInfoPtr createTable(const std::string& table_name,
                            const std::vector<ColumnDescription>& columns,

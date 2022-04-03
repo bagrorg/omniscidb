@@ -259,7 +259,6 @@ StringDictionaryProxy* RowSetMemoryOwner::getOrAddStringDictProxy(
         with_generation ? string_dictionary_generations_.getGeneration(dict_id) : -1;
     return addStringDict(dd->stringDict, dict_id, generation);
   }
-  CHECK_EQ(0, dict_id);
   if (!lit_str_dict_proxy_) {
     std::shared_ptr<StringDictionary> tsd =
         std::make_shared<StringDictionary>("", false, true, g_cache_string_hash);
@@ -1918,7 +1917,9 @@ void Executor::addTransientStringLiterals(
         }
         const auto dict_id = dict_id_visitor.visit(expr);
         if (dict_id >= 0) {
-          auto sdp = getStringDictionaryProxy(dict_id, row_set_mem_owner, true);
+          auto schema_id = db_id_ >> 24;
+          auto _dict_id = (schema_id << 24) + (dict_id & 0xffffff);
+          auto sdp = getStringDictionaryProxy(_dict_id, row_set_mem_owner, true);
           CHECK(sdp);
           TransientStringLiteralsVisitor visitor(sdp);
           visitor.visit(expr);

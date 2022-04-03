@@ -255,7 +255,7 @@ Fragmenter_Namespace::TableInfo ArrowStorage::getEmptyTableMetadata(int table_id
   return res;
 }
 
-const DictDescriptor* ArrowStorage::getDictMetadata(int dict_id) {
+const DictDescriptor* ArrowStorage::getDictMetadata(int dict_id, bool load_dict) {
   if (dicts_.count(dict_id)) {
     return dicts_.at(dict_id).get();
   }
@@ -284,6 +284,7 @@ TableInfoPtr ArrowStorage::createTable(const std::string& table_name,
         int sharing_id = type.get_comp_param();
         if (sharing_id < 0 && dict_ids.count(sharing_id)) {
           type.set_comp_param(dict_ids.at(sharing_id));
+
         } else {
           int dict_id = (schema_id_ << 24) | next_dict_id_++;
           auto dict_desc = std::make_unique<DictDescriptor>(

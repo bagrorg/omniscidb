@@ -82,7 +82,7 @@ class PersistentStorageMgr : public AbstractBufferMgr {
  protected:
   bool isForeignStorage(const ChunkKey& chunk_key) const;
   AbstractBufferMgr* getStorageMgrForTableKey(const ChunkKey& table_key) const;
-  AbstractBufferMgr* getStorageMgr(int db_id) const;
+  AbstractBufferMgr* getStorageMgr(int schema_id) const;
   bool isChunkPrefixCacheable(const ChunkKey& chunk_prefix) const;
   int recoverDataWrapperIfCachedAndGetHighestFragId(const ChunkKey& table_key);
 

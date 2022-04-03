@@ -157,7 +157,7 @@ void PersistentStorageMgr::removeTableRelatedDS(const int db_id, const int table
 const DictDescriptor* PersistentStorageMgr::getDictMetadata(int db_id,
                                                             int dict_id,
                                                             bool load_dict) {
-  auto sm = getStorageMgr(db_id);
+  auto sm = getStorageMgr(dict_id > 0 ? dict_id >> 24 : db_id >> 24);
   auto as = dynamic_cast<ArrowStorage*>(sm);
   if (as != nullptr) {
     return as->getDictMetadata(dict_id);
@@ -177,8 +177,8 @@ AbstractBufferMgr* PersistentStorageMgr::getStorageMgrForTableKey(
   return mgr_by_schema_id_.at(table_key[CHUNK_KEY_DB_IDX] >> 24).get();
 }
 
-AbstractBufferMgr* PersistentStorageMgr::getStorageMgr(int db_id) const {
-  return mgr_by_schema_id_.at(db_id >> 24).get();
+AbstractBufferMgr* PersistentStorageMgr::getStorageMgr(int schema_id) const {
+  return mgr_by_schema_id_.at(schema_id).get();
 }
 
 foreign_storage::ForeignStorageCache* PersistentStorageMgr::getDiskCache() const {
