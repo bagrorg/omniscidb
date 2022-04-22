@@ -29,9 +29,7 @@ jobs:
           $CONDA/bin/conda run -n omnisci-dev bash scripts/conda/build-install-all.sh
       - name: Test
         run: |
-          BINPATH=$(cd ${{ env.PREFIX }}/bin; pwd -P)
-          cd build
-          $CONDA/bin/conda run -n omnisci-dev make ci_tests
+          $CONDA/bin/conda run -n omnisci-dev make scripts/conda/test.sh
       - name: Upload packages
         uses: actions/upload-artifact@v2
         with:
