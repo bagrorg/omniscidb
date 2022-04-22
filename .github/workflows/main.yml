@@ -22,7 +22,7 @@ jobs:
           $CONDA/bin/conda run -n omnisci-dev bash scripts/conda/build-install-all.sh
       - name: Test
         run: |
-          $CONDA/bin/conda run -n omnisci-dev make scripts/conda/test.sh
+          $CONDA/bin/conda run -n omnisci-dev bash scripts/conda/test.sh
       - name: Upload packages
         uses: actions/upload-artifact@v2
         with:
