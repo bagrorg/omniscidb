@@ -293,6 +293,7 @@ if(ENABLE_CUDA)
     list(REMOVE_ITEM CI_TESTS ParallelSortTest)
     list(REMOVE_ITEM CI_TESTS ResultSetArrowConversion)
     list(REMOVE_ITEM CI_TESTS GpuSharedMemoryTest)
+    list(REMOVE_ITEM CI_TESTS UdfTest)
 endif()
 
 set_tests_properties(${CI_TESTS} PROPERTIES LABELS "ci")
