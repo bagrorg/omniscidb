@@ -24,7 +24,7 @@ jobs:
         run: |
           BINPATH=$(cd ${{ env.PREFIX }}/bin; pwd -P)
           cd build
-          $CONDA/bin/conda run -n omnisci-dev make sanity_tests
+          $CONDA/bin/conda run -n omnisci-dev make ci_tests
       - name: Upload packages
         uses: actions/upload-artifact@v2
         with:

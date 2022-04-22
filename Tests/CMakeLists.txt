@@ -255,14 +255,60 @@ list(APPEND SANITY_TESTS StringDictionaryHashTest)
 set_tests_properties(${SANITY_TESTS} PROPERTIES LABELS "sanity")
 
 add_custom_target(sanity_tests
-    COMMAND mkdir -p tmp
-    COMMAND touch tmp/DictPayload
-    COMMAND env AWS_REGION=${AWS_REGION}
-                AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-                AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-                ${CMAKE_CTEST_COMMAND} --verbose --label-regex sanity
-    DEPENDS ${TEST_PROGRAMS}
-    USES_TERMINAL)
+    command mkdir -p tmp
+    command touch tmp/dictpayload
+    command env aws_region=${aws_region}
+                aws_access_key_id=${aws_access_key_id}
+                aws_secret_access_key=${aws_secret_access_key}
+                ${cmake_ctest_command} --verbose --label-regex sanity
+    depends ${test_programs}
+    uses_terminal)
+
+set(CI_TESTS ${SANITY_TESTS})
+list(REMOVE CI_TESTS ResultSetTest)
+list(REMOVE CI_TESTS UdfTest)
+
+if(ENABLE_CUDA)
+    list(REMOVE CI_TESTS ArrowBasedExecuteTest)
+    list(REMOVE CI_TESTS ArrowBasedExecuteTestColumnarOutput)
+    list(REMOVE CI_TESTS ArrowBasedExecuteTestSizeAgnostic)
+    list(REMOVE CI_TESTS CodeGeneratorTest)
+    list(REMOVE CI_TESTS ColumnarResultsTest)
+    list(REMOVE CI_TESTS FromTableReorderingTest)
+    list(REMOVE CI_TESTS JoinHashTableTest)
+    list(REMOVE CI_TESTS ResultSetBaselineRadixSortTest)
+    list(REMOVE CI_TESTS StringFunctionsTest)
+    list(REMOVE CI_TESTS BumpAllocatorTest)
+    list(REMOVE CI_TESTS TableFunctionsTest)
+    list(REMOVE CI_TESTS ArrayTest)
+    list(REMOVE CI_TESTS GroupByTest)
+    list(REMOVE CI_TESTS TopKTest)
+    list(REMOVE CI_TESTS CorrelatedSubqueryTest)
+    list(REMOVE CI_TESTS EncoderTest)
+    list(REMOVE CI_TESTS SQLHintTest)
+    list(REMOVE CI_TESTS DataRecyclerTest)
+    list(REMOVE CI_TESTS NoCatalogRelAlgTest)
+    list(REMOVE CI_TESTS NoCatalogSqlTest)
+    list(REMOVE CI_TESTS ArrowStorageTest)
+    list(REMOVE CI_TESTS ArrowStorageSqlTest)
+    list(REMOVE CI_TESTS ParallelSortTest)
+    list(REMOVE CI_TESTS ResultSetArrowConversion)
+    list(REMOVE CI_TESTS GpuSharedMemoryTest)
+endif()
+
+
+set_tests_properties(${CI_TESTS} PROPERTIES LABELS "citests")
+
+add_custom_target(ci_tests
+    command mkdir -p tmp
+    command touch tmp/dictpayload
+    command env aws_region=${aws_region}
+                aws_access_key_id=${aws_access_key_id}
+                aws_secret_access_key=${aws_secret_access_key}
+                ${cmake_ctest_command} --verbose --label-regex citests
+    depends ${test_programs}
+    uses_terminal)
+
 
 add_custom_target(all_tests
     COMMAND mkdir -p tmp
