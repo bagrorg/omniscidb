@@ -266,9 +266,8 @@ add_custom_target(sanity_tests
 
 set(CI_TESTS ${SANITY_TESTS})
 list(REMOVE_ITEM CI_TESTS ResultSetTest)
-#list(REMOVE_ITEM CI_TESTS UdfTest)
 
-if(off)
+if(ENABLE_CUDA)
     list(REMOVE_ITEM CI_TESTS ArrowBasedExecuteTest)
     list(REMOVE_ITEM CI_TESTS ArrowBasedExecuteTestColumnarOutput)
     list(REMOVE_ITEM CI_TESTS ArrowBasedExecuteTestSizeAgnostic)
