@@ -11,7 +11,8 @@ RECIPE_DIR=${RECIPE_DIR:-${this_dir}}
 . ${RECIPE_DIR}/get_cxx_include_path.sh
 export CPLUS_INCLUDE_PATH=$(get_cxx_include_path)
 
-export LD_LIBRARY_PATH="$CONDA"/envs/omnisci-dev/pkgs/cuda-toolkit/targets/x86_64-linux/lib/stubs
+sudo ln -sf "$CONDA"/envs/omnisci-dev/pkgs/cuda-toolkit/targets/x86_64-linux/lib/stubs/libcuda.so.1 /usr/lib/libcuda.so.1
+sudo ln -sf "$CONDA"/envs/omnisci-dev/pkgs/cuda-toolkit/targets/x86_64-linux/lib/stubs/libcuda.so /usr/lib/libcuda.so
 
 mkdir -p build
 cd build
