@@ -255,14 +255,14 @@ list(APPEND SANITY_TESTS StringDictionaryHashTest)
 set_tests_properties(${SANITY_TESTS} PROPERTIES LABELS "sanity")
 
 add_custom_target(sanity_tests
-    command mkdir -p tmp
-    command touch tmp/dictpayload
-    command env aws_region=${aws_region}
-                aws_access_key_id=${aws_access_key_id}
-                aws_secret_access_key=${aws_secret_access_key}
-                ${cmake_ctest_command} --verbose --label-regex sanity
-    depends ${test_programs}
-    uses_terminal)
+    COMMAND mkdir -p tmp
+    COMMAND touch tmp/DictPayload
+    COMMAND env AWS_REGION=${AWS_REGION}
+                AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+                AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+                ${CMAKE_CTEST_COMMAND} --verbose --label-regex sanity
+    DEPENDS ${TEST_PROGRAMS}
+    USES_TERMINAL)
 
 set(CI_TESTS ${SANITY_TESTS})
 list(REMOVE_ITEM CI_TESTS ResultSetTest)
@@ -296,19 +296,17 @@ if(off)
     list(REMOVE_ITEM CI_TESTS GpuSharedMemoryTest)
 endif()
 
-
-set_tests_properties(${CI_TESTS} PROPERTIES LABELS "citests")
+set_tests_properties(${CI_TESTS} PROPERTIES LABELS "ci")
 
 add_custom_target(ci_tests
-    command mkdir -p tmp
-    command touch tmp/dictpayload
-    command env aws_region=${aws_region}
-                aws_access_key_id=${aws_access_key_id}
-                aws_secret_access_key=${aws_secret_access_key}
-                ${cmake_ctest_command} --verbose --label-regex citests
-    depends ${test_programs}
-    uses_terminal)
-
+    COMMAND mkdir -p tmp
+    COMMAND touch tmp/DictPayload
+    COMMAND env AWS_REGION=${AWS_REGION}
+                AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+                AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+                ${CMAKE_CTEST_COMMAND} --verbose --label-regex ci
+    DEPENDS ${TEST_PROGRAMS}
+    USES_TERMINAL)
 
 add_custom_target(all_tests
     COMMAND mkdir -p tmp
