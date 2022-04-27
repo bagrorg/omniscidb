@@ -4,7 +4,7 @@
 
 #include "Tests/ArrowSQLRunner/ArrowSQLRunner.h"
 
-size_t g_fragment_size = 1'000'000;
+static size_t g_fragment_size = 1'000'000;
 
 extern bool g_enable_heterogeneous_execution;
 extern bool g_enable_multifrag_heterogeneous_execution;
