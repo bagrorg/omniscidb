@@ -64,6 +64,7 @@ if(("${MAPD_EDITION_LOWER}" STREQUAL "ee") AND ENABLE_AWS_S3)
 endif()
 
 # Tests + Microbenchmarks
+add_executable(StringDictionaryBenchmark StringDictionaryBenchmark.cpp)
 
 set(EXECUTE_TEST_LIBS gtest fmt::fmt ArrowQueryRunner ArrowStorage ${MAPD_LIBRARIES} ${Arrow_LIBRARIES} ${CMAKE_DL_LIBS} ${CUDA_LIBRARIES} ${Boost_LIBRARIES} ${ZLIB_LIBRARIES})
 
@@ -96,9 +97,9 @@ target_link_libraries(BumpAllocatorTest ${EXECUTE_TEST_LIBS})
 target_link_libraries(TopKTest ${EXECUTE_TEST_LIBS})
 
 if(ENABLE_FOLLY) 
-  target_link_libraries(StringDictionaryTest gtest StringDictionary Logger Utils ${CMAKE_DL_LIBS} ${Folly_LIBRARIES} ${Boost_LIBRARIES} ${ZLIB_LIBRARIES})
+  target_link_libraries(StringDictionaryTest gtest StringDictionary Logger Utils $<$<AND:$<CXX_COMPILER_ID:GNU>,$<VERSION_LESS:$<CXX_COMPILER_VERSION>,9.0>>:stdc++fs> ${CMAKE_DL_LIBS} ${Folly_LIBRARIES} ${Boost_LIBRARIES} ${ZLIB_LIBRARIES})
 else()
-  target_link_libraries(StringDictionaryTest gtest StringDictionary Logger Utils ${CMAKE_DL_LIBS} ${Boost_LIBRARIES} ${ZLIB_LIBRARIES})
+  target_link_libraries(StringDictionaryTest gtest StringDictionary Logger Utils $<$<AND:$<CXX_COMPILER_ID:GNU>,$<VERSION_LESS:$<CXX_COMPILER_VERSION>,9.0>>:stdc++fs> ${CMAKE_DL_LIBS} ${Boost_LIBRARIES} ${ZLIB_LIBRARIES})
 endif()
 
 target_link_libraries(CorrelatedSubqueryTest ${EXECUTE_TEST_LIBS})
@@ -122,6 +123,12 @@ target_link_libraries(ResultSetArrowConversion ${EXECUTE_TEST_LIBS})
 
 if(NOT ${CMAKE_SYSTEM_NAME} STREQUAL "Darwin")
   target_link_libraries(UdfTest gtest UdfCompiler ${EXECUTE_TEST_LIBS})
+endif()
+
+if(ENABLE_FOLLY)
+  target_link_libraries(StringDictionaryBenchmark benchmark gtest StringDictionary Logger Utils $<$<AND:$<CXX_COMPILER_ID:GNU>,$<VERSION_LESS:$<CXX_COMPILER_VERSION>,9.0>>:stdc++fs> ${CMAKE_DL_LIBS} ${Folly_LIBRARIES} ${Boost_LIBRARIES} ${ZLIB_LIBRARIES})
+else()
+  target_link_libraries(StringDictionaryBenchmark benchmark gtest StringDictionary Logger Utils $<$<AND:$<CXX_COMPILER_ID:GNU>,$<VERSION_LESS:$<CXX_COMPILER_VERSION>,9.0>>:stdc++fs> ${CMAKE_DL_LIBS} ${Boost_LIBRARIES} ${ZLIB_LIBRARIES})
 endif()
 
 if(ENABLE_CUDA)

@@ -1495,6 +1495,7 @@ class ExecuteTestBase {
     createWindowFuncTable(true);
     createWindowFuncTable(false);
     createLargeWindowFuncTable(true);
+    createLargeWindowFuncTable(false);
     createUnionAllTestsTable();
     createVarlenLazyFetchTable();
   }
@@ -3034,50 +3035,84 @@ TEST_F(Select, Arrays) {
                        dt),
         std::vector<int64_t>({1, 0, 1, 0, 1, 0}));
 
-    // throw exception when comparing full array joins
-    EXPECT_THROW(run_simple_agg("SELECT COUNT(1) FROM array_test t1, array_test t2 WHERE "
-                                "t1.arr_i32 < t2.arr_i32;",
-                                dt),
-                 std::runtime_error);
-
-    EXPECT_THROW(run_simple_agg("SELECT COUNT(1) FROM array_test t1, array_test t2 WHERE "
-                                "t1.arr_i32 <= t2.arr_i32;",
-                                dt),
-                 std::runtime_error);
-
-    EXPECT_THROW(run_simple_agg("SELECT COUNT(1) FROM array_test t1, array_test t2 WHERE "
-                                "t1.arr_i32 > t2.arr_i32;",
-                                dt),
-                 std::runtime_error);
-
-    EXPECT_THROW(run_simple_agg("SELECT COUNT(1) FROM array_test t1, array_test t2 WHERE "
-                                "t1.arr_i32 >= t2.arr_i32;",
-                                dt),
-                 std::runtime_error);
-    EXPECT_THROW(run_simple_agg("SELECT COUNT(1) FROM array_test t1, array_test t2 WHERE "
-                                "t1.arr_i32 <> t2.arr_i32;",
-                                dt),
-                 std::runtime_error);
+    const auto watchdog_state = g_enable_watchdog;
+    ScopeGuard reset_Watchdog_state = [&watchdog_state] {
+      g_enable_watchdog = watchdog_state;
+    };
+    g_enable_watchdog = true;
+    // throw exception when comparing full array joins when watchdog is on
     EXPECT_THROW(run_simple_agg("SELECT COUNT(1) FROM array_test t1, array_test t2 WHERE "
                                 "t1.arr_str[1] > t2.arr_str[1];",
                                 dt),
                  std::runtime_error);
+
     EXPECT_THROW(run_simple_agg("SELECT COUNT(1) FROM array_test t1, array_test t2 WHERE "
                                 "t1.arr_str[1] >= t2.arr_str[1];",
                                 dt),
                  std::runtime_error);
+
     EXPECT_THROW(run_simple_agg("SELECT COUNT(1) FROM array_test t1, array_test t2 WHERE "
                                 "t1.arr_str[1] < t2.arr_str[1];",
                                 dt),
                  std::runtime_error);
+
     EXPECT_THROW(run_simple_agg("SELECT COUNT(1) FROM array_test t1, array_test t2 WHERE "
                                 "t1.arr_str[1] <= t2.arr_str[1];",
                                 dt),
                  std::runtime_error);
-    EXPECT_NO_THROW(
-        run_simple_agg("SELECT COUNT(1) FROM array_test t1, array_test t2 WHERE "
-                       "t1.arr_str[1] <> t2.arr_str[1];",
-                       dt));
+
+    // Even with watchdog on, we can do non-equality on dictionary string as dictionary is
+    // shared since we are comparing a column with itself
+
+    EXPECT_EQ(int64_t(20),
+              v<int64_t>(run_simple_agg(
+                  "SELECT COUNT(1) FROM array_test t1, array_test t2 WHERE "
+                  "t1.arr_str[1] = t2.arr_str[1];",
+                  dt)));
+
+    // New behavior introduced by [QE-261] allows translation to none-encoded strings for
+    // comparison if watchdog is off for non-distributed deployments
+
+    // The following tests throw "Cast from dictionary-encoded string to
+    // none-encoded not supported for distributed queries" in distributed mode.
+    // We will unlock these with planned work for sort permutations of dictionary
+    // translation maps, as well as much faster support for this class of queries
+    // with watchdog off (distributed and single-node).
+
+    g_enable_watchdog = false;
+
+    EXPECT_EQ(int64_t(190),
+              v<int64_t>(run_simple_agg(
+                  "SELECT COUNT(1) FROM array_test t1, array_test t2 WHERE "
+                  "t1.arr_str[1] > t2.arr_str[1];",
+                  dt)));  //
+
+    EXPECT_EQ(int64_t(210),
+              v<int64_t>(run_simple_agg(
+                  "SELECT COUNT(1) FROM array_test t1, array_test t2 WHERE "
+                  "t1.arr_str[1] >= t2.arr_str[1];",
+                  dt)));
+
+    EXPECT_EQ(int64_t(190),
+              v<int64_t>(run_simple_agg(
+                  "SELECT COUNT(1) FROM array_test t1, array_test t2 WHERE "
+                  "t1.arr_str[1] < t2.arr_str[1];",
+                  dt)));
+
+    EXPECT_EQ(int64_t(210),
+              v<int64_t>(run_simple_agg(
+                  "SELECT COUNT(1) FROM array_test t1, array_test t2 WHERE "
+                  "t1.arr_str[1] <= t2.arr_str[1];",
+                  dt)));
+
+    // This query can run on distributed as it can leverage distributed
+    // string translation
+
+    EXPECT_EQ(int64_t(20),
+              v<int64_t>(run_simple_agg(
+                  "SELECT COUNT(1) FROM array_test t1, array_test t2 WHERE "
+                  "t1.arr_str[1] = t2.arr_str[1];",
+                  dt)));
   }
 }
 
@@ -4384,18 +4419,87 @@ TEST_F(Select, Case) {
       dt);
     c(R"(SELECT COUNT(*) FROM test WHERE (CASE WHEN fixed_str = 'foo' THEN 'a' WHEN fixed_str is NULL THEN 'b' ELSE str END) = 'z';)",
       dt);
+
+    c(R"(SELECT CASE WHEN x = 7 THEN 'a' WHEN x = 8 then str ELSE fixed_str END FROM test ORDER BY x, str, fixed_str ASC;)",
+      dt);
+    c(R"(SELECT CASE WHEN x = 7 THEN 'a' WHEN str <> fixed_str then str ELSE fixed_str END FROM test ORDER BY x, str, fixed_str ASC;)",
+      dt);
+    c(R"(SELECT CASE WHEN x = 8 THEN 'a' WHEN str <> fixed_str then str ELSE fixed_str END AS case_group, COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
+      dt);
+    c(R"(SELECT CASE WHEN x = 8 THEN 'a' WHEN str <> fixed_str then 'b' ELSE fixed_str END AS case_group,
+     COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
+      dt);
+    c(R"(SELECT CASE WHEN x = 8 THEN 'a' WHEN str <> fixed_str THEN 'b' ELSE NULL END AS case_group,
+     COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
+      dt);
+    c(R"(SELECT CASE WHEN x = 8 THEN 'a' WHEN str <> fixed_str THEN NULL ELSE NULL END AS case_group,
+     COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
+      dt);
+    EXPECT_ANY_THROW(c(
+        R"(SELECT CASE WHEN x = 8 THEN NULL WHEN str <> fixed_str THEN NULL ELSE NULL END AS case_group,
+     COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
+        dt));  // Untyped NULL values are not supported. Please CAST any NULL constants to
+               // a type.
+    c(R"(SELECT CASE WHEN x = 8 THEN NULL WHEN str <> fixed_str THEN str ELSE fixed_str END AS case_group,
+     COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
+      dt);
+    c(R"(SELECT CASE WHEN x = 8 THEN str WHEN x = 7 THEN 'b' END AS case_group,
+     COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
+      dt);
+    c(R"(SELECT CASE WHEN x = 8 THEN str WHEN x = 7 THEN NULL END AS case_group,
+     COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
+      dt);
+    c(R"(SELECT CASE WHEN x = 8 THEN 'b' WHEN x = 7 THEN str END AS case_group,
+     COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
+      dt);
+    c(R"(SELECT CASE WHEN x = 8 THEN NULL WHEN x = 7 THEN str END AS case_group,
+     COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
+      dt);
+    c(R"(SELECT CASE WHEN x = 8 THEN str ELSE 'b' END AS case_group,
+     COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
+      dt);
+    c(R"(SELECT CASE WHEN x = 8 THEN str ELSE NULL END AS case_group,
+     COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
+      dt);
+    c(R"(SELECT CASE WHEN x = 8 THEN 'b' ELSE str END AS case_group,
+     COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
+      dt);
+    c(R"(SELECT CASE WHEN x = 8 THEN NULL ELSE str END AS case_group,
+     COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
+      dt);
+    c(R"(SELECT CASE WHEN x = 8 THEN 'b' ELSE str END AS case_group,
+     COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
+      dt);
+    // Note that Sqlite does not support TRUE/FALSE boolean literals, use 1/0 instead
+    c(R"(SELECT CASE WHEN x = 8 THEN FALSE ELSE (str = fixed_str) END AS case_group,
+     COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
+      R"(SELECT CASE WHEN x = 8 THEN 0 ELSE (str = fixed_str) END AS case_group,
+     COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
+      dt);
+    c(R"(SELECT COUNT(*) FROM test WHERE CASE WHEN x = 7 THEN str WHEN x = 8 THEN fixed_str ELSE 'bar' END = 'foo';)",
+      dt);
+    c(R"(SELECT COUNT(*) FROM test WHERE CASE WHEN x = 7 THEN str WHEN x = 8 THEN fixed_str ELSE 'bar' END = str;)",
+      dt);
+    c(R"(SELECT COUNT(*) FROM test WHERE CASE WHEN x = 7 THEN str WHEN x = 8 THEN fixed_str ELSE 'bar' END = fixed_str;)",
+      dt);
+
+    c(R"(SELECT CASE WHEN x = 8 THEN 'b' WHEN x = 7 THEN str END AS case_group, COUNT(*) AS n FROM test WHERE CASE WHEN x = 7 THEN str WHEN x = 8 THEN fixed_str ELSE 'bar' END = str GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
+      dt);
+
+    EXPECT_ANY_THROW(
+        c(R"(SELECT CASE WHEN x = 8 THEN str ELSE (str = fixed_str) END AS case_group,
+     COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
+          dt));  // Cast from BOOLEAN to TEXT not supported
+
     {
       const auto watchdog_state = g_enable_watchdog;
       g_enable_watchdog = true;
       ScopeGuard reset_Watchdog_state = [&watchdog_state] {
         g_enable_watchdog = watchdog_state;
       };
-      EXPECT_ANY_THROW(run_multiple_agg(
-          R"(SELECT CASE WHEN x = 7 THEN 'a' WHEN x = 8 then str ELSE fixed_str END FROM test;)",
-          dt));  // Cast from dictionary-encoded string to none-encoded would
-                 // be slow
-      g_enable_watchdog = false;
+
       // casts not yet supported in distributed mode
+      g_enable_watchdog = false;
       c(R"(SELECT CASE WHEN x = 7 THEN 'a' WHEN x = 8 then str ELSE fixed_str END FROM test ORDER BY 1;)",
         dt);
       c(R"(SELECT CASE WHEN str = 'foo' THEN real_str WHEN str = 'bar' THEN 'b' ELSE null_str END FROM test ORDER BY 1)",
@@ -4556,6 +4660,9 @@ TEST_F(Select, Case) {
     c("SELECT fixed_str AS key0, str as key1, count(*) as val FROM test WHERE "
       "((fixed_str IN (SELECT fixed_str FROM test GROUP BY fixed_str))) GROUP BY key0, "
       "key1 ORDER BY val desc;",
+      dt);
+    c("SELECT CASE str WHEN 'foo' THEN 'truncated' ELSE 'bar' END trunc"
+      " FROM test ORDER BY trunc;",
       dt);
   }
 }
@@ -4887,10 +4994,58 @@ TEST_F(Select, StringCompare) {
     c("SELECT COUNT(*) FROM test WHERE 'ba' > shared_dict;", dt);
     c("SELECT COUNT(*) FROM test WHERE 'bar' > shared_dict;", dt);
 
-    EXPECT_THROW(run_multiple_agg("SELECT COUNT(*) FROM test, test_inner WHERE "
-                                  "test.shared_dict < test_inner.str",
-                                  dt),
+    const auto watchdog_state = g_enable_watchdog;
+    ScopeGuard reset_Watchdog_state = [&watchdog_state] {
+      g_enable_watchdog = watchdog_state;
+    };
+
+    g_enable_watchdog = true;
+
+    EXPECT_THROW(run_simple_agg("SELECT COUNT(*) FROM test, test_inner WHERE "
+                                "test.shared_dict < test_inner.str",
+                                dt),
                  std::runtime_error);
+
+    g_enable_watchdog = false;
+
+    c("SELECT COUNT(*) FROM test, test_inner WHERE "
+      "test.shared_dict < test_inner.str",
+      dt);
+  }
+}
+
+TEST_F(Select, DictionaryStringEquality) {
+  // Introduces by QE-261, ensure that = and <> comparisons can
+  // execute between two text columns even when they do not share
+  // dictionaries, with watchdog both on and off and without punting
+  // to CPU
+  const auto watchdog_state = g_enable_watchdog;
+  const auto cpu_retry_state = g_allow_cpu_retry;
+  const auto cpu_step_retry_state = g_allow_query_step_cpu_retry;
+
+  ScopeGuard reset_global_state =
+      [&watchdog_state, &cpu_retry_state, &cpu_step_retry_state] {
+        g_enable_watchdog = watchdog_state;
+        g_allow_cpu_retry = cpu_retry_state;
+        g_allow_query_step_cpu_retry = cpu_step_retry_state;
+      };
+
+  g_allow_cpu_retry = false;
+  g_allow_query_step_cpu_retry = false;
+
+  for (auto enable_watchdog : {true, false}) {
+    g_enable_watchdog = enable_watchdog;
+    for (auto dt : {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU}) {
+      SKIP_NO_GPU();
+      c("SELECT COUNT(*) FROM test WHERE str = fixed_str", dt);
+      c("SELECT COUNT(*) FROM test WHERE str <> fixed_str", dt);
+      c("SELECT COUNT(*) FROM test WHERE fixed_str = str", dt);
+      c("SELECT COUNT(*) FROM test WHERE fixed_str <> str", dt);
+      c("SELECT COUNT(*) FROM test WHERE str = null_str", dt);
+      c("SELECT COUNT(*) FROM test WHERE str <> null_str", dt);
+      c("SELECT COUNT(*) FROM test WHERE null_str = str", dt);
+      c("SELECT COUNT(*) FROM test WHERE null_str <> str", dt);
+    }
   }
 }
 
@@ -8749,6 +8904,8 @@ TEST_F(Select, ScalarSubquery) {
     c("SELECT SUM(x) + SUM(y) FROM test GROUP BY z HAVING (SELECT d FROM test "
       "GROUP BY d HAVING d > 2.4 LIMIT 1) > 2.4 ORDER BY z;",
       dt);
+    EXPECT_THROW(run_multiple_agg("SELECT 5 - (SELECT rowid FROM test);", dt),
+                 std::runtime_error);
   }
 }
 
@@ -9274,6 +9431,15 @@ TEST_F(Select, Joins_ImplicitJoins) {
     c("SELECT COUNT(*) FROM test, test_inner WHERE test.str = test_inner.str;", dt);
     c("SELECT test.str, COUNT(*) FROM test, test_inner WHERE test.str = test_inner.str "
       "GROUP BY test.str;",
+      dt);
+    c("WITH transient_strings AS (SELECT CASE WHEN str = 'foo' THEN 'foo' ELSE 'other' "
+      "END AS str FROM test) SELECT COUNT(*) FROM test_inner, transient_strings WHERE "
+      "test_inner.str = transient_strings.str;",
+      dt);
+    c("WITH transient_strings AS (SELECT str FROM test_inner WHERE str IN ('foo', "
+      "'bars')) SELECT COUNT(*) FROM test_inner, transient_strings WHERE test_inner.str "
+      "= "
+      "transient_strings.str;",
       dt);
     c("SELECT test_inner.str, COUNT(*) FROM test, test_inner WHERE test.str = "
       "test_inner.str GROUP BY test_inner.str;",
@@ -11083,6 +11249,10 @@ TEST_F(Select, ArrowOutput) {
     c_arrow("SELECT m,m_3,m_6,m_9 from test", dt);
     c_arrow("SELECT o, o1, o2 from test", dt);
     c_arrow("SELECT n from test", dt);
+    c_arrow(
+        "SELECT x, CASE WHEN x = 7 THEN 'foo' ELSE 'bar' END AS case_x FROM test "
+        "WHERE str IN ('bar', 'baz') ORDER BY x ASC;",
+        dt);
   }
 }
 
@@ -12823,6 +12993,52 @@ TEST_F(Select, TimestampPrecision_HighPrecisionCastsWithIntervals) {
         v<int64_t>(run_simple_agg(
             "SELECT (cast(m as timestamp(9)) + INTERVAL '1' minute) from test limit 1;",
             dt)));
+  }
+}
+
+TEST_F(Select, TimestampPrecision_CastFromInt) {
+  char const* const queries[] = {
+      // CAST(TINYINT column AS TIMESTAMP(*))
+      "SELECT CAST('1970-01-01 00:01:32' AS TIMESTAMP)"
+      " = CAST(w+100 AS TIMESTAMP) FROM test WHERE w+100=92 GROUP BY w;",
+      "SELECT CAST('1970-01-01 00:00:00.092' AS TIMESTAMP(3))"
+      " = CAST(w+100 AS TIMESTAMP(3)) FROM test WHERE w+100=92 GROUP BY w;",
+      "SELECT CAST('1970-01-01 00:00:00.000092' AS TIMESTAMP(6))"
+      " = CAST(w+100 AS TIMESTAMP(6)) FROM test WHERE w+100=92 GROUP BY w;",
+      "SELECT CAST('1970-01-01 00:00:00.000000092' AS TIMESTAMP(9))"
+      " = CAST(w+100 AS TIMESTAMP(9)) FROM test WHERE w+100=92 GROUP BY w;",
+      // CAST(SMALLINT column AS TIMESTAMP(*))
+      "SELECT CAST('1970-01-01 00:01:41' AS TIMESTAMP)"
+      " = CAST(z AS TIMESTAMP) FROM test WHERE z=101 GROUP BY z;",
+      "SELECT CAST('1970-01-01 00:00:00.101' AS TIMESTAMP(3))"
+      " = CAST(z AS TIMESTAMP(3)) FROM test WHERE z=101 GROUP BY z;",
+      "SELECT CAST('1970-01-01 00:00:00.000101' AS TIMESTAMP(6))"
+      " = CAST(z AS TIMESTAMP(6)) FROM test WHERE z=101 GROUP BY z;",
+      "SELECT CAST('1970-01-01 00:00:00.000000101' AS TIMESTAMP(9))"
+      " = CAST(z AS TIMESTAMP(9)) FROM test WHERE z=101 GROUP BY z;",
+      // CAST(INTEGER column AS TIMESTAMP(*))
+      "SELECT CAST('1970-01-01 00:00:07' AS TIMESTAMP)"
+      " = CAST(x AS TIMESTAMP) FROM test WHERE x=7 GROUP BY x;",
+      "SELECT CAST('1970-01-01 00:00:00.007' AS TIMESTAMP(3))"
+      " = CAST(x AS TIMESTAMP(3)) FROM test WHERE x=7 GROUP BY x;",
+      "SELECT CAST('1970-01-01 00:00:00.000007' AS TIMESTAMP(6))"
+      " = CAST(x AS TIMESTAMP(6)) FROM test WHERE x=7 GROUP BY x;",
+      "SELECT CAST('1970-01-01 00:00:00.000000007' AS TIMESTAMP(9))"
+      " = CAST(x AS TIMESTAMP(9)) FROM test WHERE x=7 GROUP BY x;",
+      // CAST(BIGINT column AS TIMESTAMP(*))
+      "SELECT CAST('1970-01-01 00:16:41' AS TIMESTAMP)"
+      " = CAST(t AS TIMESTAMP) FROM test WHERE t=1001 GROUP BY t;",
+      "SELECT CAST('1970-01-01 00:00:01.001' AS TIMESTAMP(3))"
+      " = CAST(t AS TIMESTAMP(3)) FROM test WHERE t=1001 GROUP BY t;",
+      "SELECT CAST('1970-01-01 00:00:00.001001' AS TIMESTAMP(6))"
+      " = CAST(t AS TIMESTAMP(6)) FROM test WHERE t=1001 GROUP BY t;",
+      "SELECT CAST('1970-01-01 00:00:00.000001001' AS TIMESTAMP(9))"
+      " = CAST(t AS TIMESTAMP(9)) FROM test WHERE t=1001 GROUP BY t;"};
+  for (auto dt : {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU}) {
+    SKIP_NO_GPU();
+    for (char const* const query : queries) {
+      ASSERT_TRUE(v<int64_t>(run_simple_agg(query, dt))) << query;
+    }
   }
 }
 
@@ -16086,6 +16302,59 @@ TEST_F(Select, WindowFunctionLag) {
           c(part1, dt);
         }
       }
+    }
+  }
+}
+
+TEST_F(Select, WindowFunctionMultiOrderBy) {
+  const ExecutorDeviceType dt = ExecutorDeviceType::CPU;
+  for (std::string table_name :
+       {"test_window_func_large", "test_window_func_large_multi_frag"}) {
+    {
+      std::string query =
+          "SELECT LAG(f) OVER (ORDER BY f NULLS FIRST, d NULLS FIRST) AS f_lag FROM " +
+          table_name + " ORDER BY f_lag ASC NULLS FIRST;";
+      c(query, query, dt);
+    }
+
+    {
+      std::string query =
+          "SELECT LAG(f) OVER (ORDER BY d NULLS FIRST, f DESC NULLS FIRST) AS f_lag "
+          "FROM " +
+          table_name + " ORDER BY f_lag ASC NULLS FIRST;";
+      c(query, query, dt);
+    }
+
+    {
+      std::string query =
+          "SELECT LAG(d) OVER (ORDER BY f DESC NULLS FIRST, f ASC NULLS FIRST) AS d_lag "
+          "FROM " +
+          table_name + " ORDER BY d_lag ASC NULLS FIRST;";
+      c(query, query, dt);
+    }
+
+    {
+      std::string query =
+          "SELECT LAG(d) OVER (ORDER BY d DESC NULLS FIRST, d DESC NULLS FIRST) AS d_lag "
+          "FROM " +
+          table_name + " ORDER BY d_lag ASC NULLS FIRST;";
+      c(query, query, dt);
+    }
+
+    {
+      std::string query =
+          "SELECT LAG(i_unique) OVER (ORDER BY i_20 ASC NULLS FIRST, i_unique DESC NULLS "
+          "FIRST) AS i_unique_lag FROM " +
+          table_name + " ORDER BY i_unique_lag ASC NULLS FIRST;";
+      c(query, query, dt);
+    }
+
+    {
+      std::string query =
+          "SELECT LAG(i_unique) OVER (ORDER BY i_20 ASC NULLS FIRST, i_1000 DESC NULLS "
+          "FIRST, d ASC NULLS FIRST, i_unique DESC NULLS FIRST) AS i_unique_lag FROM " +
+          table_name + " ORDER BY i_unique_lag ASC NULLS FIRST;";
+      c(query, query, dt);
     }
   }
 }

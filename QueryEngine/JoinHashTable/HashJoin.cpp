@@ -320,6 +320,50 @@ std::shared_ptr<HashJoin> HashJoin::getInstance(
   return join_hash_table;
 }
 
+std::pair<const StringDictionaryProxy*, const StringDictionaryProxy*>
+HashJoin::getStrDictProxies(const InnerOuter& cols, const Executor* executor) {
+  const auto inner_col = cols.first;
+  CHECK(inner_col);
+  const auto inner_ti = inner_col->get_type_info();
+  const auto outer_col = dynamic_cast<const Analyzer::ColumnVar*>(cols.second);
+  std::pair<const StringDictionaryProxy*, const StringDictionaryProxy*>
+      inner_outer_str_dict_proxies{nullptr, nullptr};
+  if (inner_ti.is_string() && outer_col) {
+    CHECK(outer_col->get_type_info().is_string());
+    inner_outer_str_dict_proxies.first =
+        executor->getStringDictionaryProxy(inner_col->get_comp_param(), true);
+    CHECK(inner_outer_str_dict_proxies.first);
+    inner_outer_str_dict_proxies.second =
+        executor->getStringDictionaryProxy(outer_col->get_comp_param(), true);
+    CHECK(inner_outer_str_dict_proxies.second);
+    if (*inner_outer_str_dict_proxies.first == *inner_outer_str_dict_proxies.second) {
+      // Dictionaries are the same - don't need to translate
+      CHECK(inner_col->get_comp_param() == outer_col->get_comp_param());
+      inner_outer_str_dict_proxies.first = nullptr;
+      inner_outer_str_dict_proxies.second = nullptr;
+    }
+  }
+  return inner_outer_str_dict_proxies;
+}
+
+const StringDictionaryProxy::IdMap* HashJoin::translateInnerToOuterStrDictProxies(
+    const InnerOuter& cols,
+    const Executor* executor) {
+  const auto inner_outer_proxies = HashJoin::getStrDictProxies(cols, executor);
+  const bool translate_dictionary =
+      inner_outer_proxies.first && inner_outer_proxies.second;
+  if (translate_dictionary) {
+    const auto inner_dict_id = inner_outer_proxies.first->getDictId();
+    const auto outer_dict_id = inner_outer_proxies.second->getDictId();
+    CHECK_NE(inner_dict_id, outer_dict_id);
+    return executor->getIntersectionStringProxyTranslationMap(
+        inner_outer_proxies.first,
+        inner_outer_proxies.second,
+        executor->getRowSetMemoryOwner());
+  }
+  return nullptr;
+}
+
 CompositeKeyInfo HashJoin::getCompositeKeyInfo(
     const std::vector<InnerOuter>& inner_outer_pairs,
     const Executor* executor) {
@@ -355,6 +399,37 @@ CompositeKeyInfo HashJoin::getCompositeKeyInfo(
     cache_key_chunks.push_back(cache_key_chunks_for_column);
   }
   return {sd_inner_proxy_per_key, sd_outer_proxy_per_key, cache_key_chunks};
+}
+
+std::vector<const StringDictionaryProxy::IdMap*>
+HashJoin::translateCompositeStrDictProxies(const CompositeKeyInfo& composite_key_info,
+                                           const Executor* executor) {
+  const auto& inner_proxies = composite_key_info.sd_inner_proxy_per_key;
+  const auto& outer_proxies = composite_key_info.sd_outer_proxy_per_key;
+  const size_t num_proxies = inner_proxies.size();
+  CHECK_EQ(num_proxies, outer_proxies.size());
+  std::vector<const StringDictionaryProxy::IdMap*> proxy_translation_maps;
+  proxy_translation_maps.reserve(num_proxies);
+  for (size_t proxy_pair_idx = 0; proxy_pair_idx < num_proxies; ++proxy_pair_idx) {
+    const bool translate_proxies =
+        inner_proxies[proxy_pair_idx] && outer_proxies[proxy_pair_idx];
+    if (translate_proxies) {
+      const auto inner_proxy =
+          reinterpret_cast<const StringDictionaryProxy*>(inner_proxies[proxy_pair_idx]);
+      const auto outer_proxy =
+          reinterpret_cast<const StringDictionaryProxy*>(outer_proxies[proxy_pair_idx]);
+      CHECK(inner_proxy);
+      CHECK(outer_proxy);
+
+      CHECK_NE(inner_proxy->getDictId(), outer_proxy->getDictId());
+      proxy_translation_maps.emplace_back(
+          executor->getIntersectionStringProxyTranslationMap(
+              inner_proxy, outer_proxy, executor->getRowSetMemoryOwner()));
+    } else {
+      proxy_translation_maps.emplace_back(nullptr);
+    }
+  }
+  return proxy_translation_maps;
 }
 
 std::shared_ptr<Analyzer::ColumnVar> getSyntheticColumnVar(std::string_view table,
