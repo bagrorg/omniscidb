@@ -53,7 +53,7 @@ static void tpch_q1(benchmark::State& state) {
   )";
 
   for (auto _ : state) {
-    run_multiple_agg(query, ExecutorDeviceType::GPU);
+    run_multiple_agg(query, device);
   }
 }
 
@@ -104,7 +104,7 @@ static void tpch_q2(benchmark::State& state) {
   )";
 
   for (auto _ : state) {
-    run_multiple_agg(query, ExecutorDeviceType::GPU);
+    run_multiple_agg(query, device);
   }
 }
 
@@ -136,7 +136,7 @@ static void tpch_q3(benchmark::State& state) {
   )";
 
   for (auto _ : state) {
-    run_multiple_agg(query, ExecutorDeviceType::GPU);
+    run_multiple_agg(query, device);
   }
 }
 
@@ -167,7 +167,7 @@ static void tpch_q4(benchmark::State& state) {
   )";
 
   for (auto _ : state) {
-    run_multiple_agg(query, ExecutorDeviceType::GPU);
+    run_multiple_agg(query, device);
   }
 }
 
@@ -203,6 +203,8 @@ int main(int argc, char* argv[]) {
   desc.add_options()("fragment-size",
                      po::value<size_t>(&g_fragment_size)->default_value(g_fragment_size),
                      "Table fragment size.");
+  desc.add_options()("gpu,g",
+                     "Flag to execute on gpu.");
 
   logger::LogOptions log_options(argv[0]);
   log_options.severity_ = logger::Severity::FATAL;
@@ -215,6 +217,10 @@ int main(int argc, char* argv[]) {
 
   if (vm.count("help")) {
     std::cout << "Usage:" << std::endl << desc << std::endl;
+  }
+
+  if (vm.count("gpu")) {
+    device = ExecutorDeviceType::GPU;
   }
 
   logger::init(log_options);
