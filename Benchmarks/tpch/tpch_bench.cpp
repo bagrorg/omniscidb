@@ -4,6 +4,8 @@
 
 #include "Tests/ArrowSQLRunner/ArrowSQLRunner.h"
 
+#include "Benchmarks/benchmarks_utils/benchmarks_utils.h"
+
 static size_t g_fragment_size = 1'000'000;
 
 extern bool g_enable_heterogeneous_execution;
@@ -13,14 +15,7 @@ namespace fs = boost::filesystem;
 namespace po = boost::program_options;
 using namespace TestHelpers::ArrowSQLRunner;
 
-using TableColumnsDescription = std::vector<ArrowStorage::ColumnDescription>;
-
-static void createTPCHTables(const std::string& tableName,
-                             TableColumnsDescription& tableColumns) {
-  getStorage()->dropTable(tableName);
-  ArrowStorage::TableOptions to{g_fragment_size};
-  createTable(tableName, tableColumns, to);
-}
+static ExecutorDeviceType device = ExecutorDeviceType::CPU;
 
 static void populateTPCHTables(const fs::path& data_p,
                                const std::string& name,
@@ -29,20 +24,6 @@ static void populateTPCHTables(const fs::path& data_p,
   po.delimiter = delim;
   po.header = false;
   getStorage()->appendCsvFile(data_p.string(), name, po);
-}
-
-// Is it better to create util library for tpch and taxi benchmarks?
-template <class T>
-T v(const TargetValue& r) {
-  auto scalar_r = boost::get<ScalarTargetValue>(&r);
-  auto p = boost::get<T>(scalar_r);
-  return *p;
-}
-
-static void warmup() {
-  auto res = v<int64_t>(
-      run_simple_agg("select count(*) from lineitem", ExecutorDeviceType::GPU));
-  std::cout << "Number of loaded tuples: " << res << std::endl;
 }
 
 static void tpch_q1(benchmark::State& state) {
@@ -248,7 +229,7 @@ int main(int argc, char* argv[]) {
                                                 "region",
                                                 "supplier"};
 
-  std::vector<TableColumnsDescription> tpch_tables_columns = {
+  std::vector<benchmarks_utils::TableColumnsDescription> tpch_tables_columns = {
       {
           {"C_CUSTKEY", SQLTypeInfo(kBIGINT)},
           {"C_NAME", SQLTypeInfo(kVARCHAR, true, kENCODING_DICT)},
@@ -339,11 +320,11 @@ int main(int argc, char* argv[]) {
 
   try {
     for (size_t i = 0; i < tpch_tables_names.size(); i++) {
-      createTPCHTables(tpch_tables_names[i], tpch_tables_columns[i]);
+      benchmarks_utils::createTable(tpch_tables_names[i], tpch_tables_columns[i], g_fragment_size);
       populateTPCHTables(
           data_path / (tpch_tables_names[i] + ".csv"), tpch_tables_names[i], delim);
     }
-    warmup();
+    benchmarks_utils::warmup("lineitem", device);
     ::benchmark::RunSpecifiedBenchmarks();
   } catch (const std::exception& e) {
     LOG(ERROR) << e.what();
