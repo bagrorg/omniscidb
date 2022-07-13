@@ -187,6 +187,7 @@ class QueryMemoryInitializer {
   GpuGroupByBuffers createAndInitializeGroupByBufferGpu(
       const RelAlgExecutionUnit& ra_exe_unit,
       const QueryMemoryDescriptor& query_mem_desc,
+      const Config& config,
       const CUdeviceptr init_agg_vals_dev_ptr,
       const int device_id,
       const ExecutorDispatchMode dispatch_mode,
@@ -217,7 +218,8 @@ class QueryMemoryInitializer {
                                    const GpuGroupByBuffers& gpu_group_by_buffers,
                                    const RelAlgExecutionUnit& ra_exe_unit,
                                    const unsigned total_thread_count,
-                                   const int device_id);
+                                   const int device_id,
+                                   bool bigint_count);
 
   std::shared_ptr<VarlenOutputInfo> getVarlenOutputInfo();
 

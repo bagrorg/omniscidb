@@ -22,21 +22,22 @@ using namespace Data_Namespace;
 
 class PersistentStorageMgr : public AbstractBufferMgr {
  public:
-  PersistentStorageMgr(const std::string& data_dir, const size_t num_reader_threads);
+  PersistentStorageMgr(const size_t num_reader_threads);
 
   AbstractBuffer* createBuffer(const ChunkKey& chunk_key,
                                const size_t page_size,
                                const size_t initial_size) override;
+  AbstractBuffer* createZeroCopyBuffer(const ChunkKey& key,
+                                       std::unique_ptr<AbstractDataToken> token) override;
   void deleteBuffer(const ChunkKey& chunk_key, const bool purge) override;
   void deleteBuffersWithPrefix(const ChunkKey& chunk_key_prefix,
                                const bool purge) override;
   AbstractBuffer* getBuffer(const ChunkKey& chunk_key, const size_t num_bytes) override;
+  std::unique_ptr<AbstractDataToken> getZeroCopyBufferMemory(const ChunkKey& key,
+                                                             size_t numBytes) override;
   void fetchBuffer(const ChunkKey& chunk_key,
                    AbstractBuffer* destination_buffer,
                    const size_t num_bytes) override;
-  AbstractBuffer* putBuffer(const ChunkKey& chunk_key,
-                            AbstractBuffer* source_buffer,
-                            const size_t num_bytes) override;
   void getChunkMetadataVecForKeyPrefix(ChunkMetadataVector& chunk_metadata,
                                        const ChunkKey& chunk_key_prefix) override;
   bool isBufferOnDevice(const ChunkKey& chunk_key) override;
@@ -45,18 +46,13 @@ class PersistentStorageMgr : public AbstractBufferMgr {
   size_t getInUseSize() override;
   size_t getAllocated() override;
   bool isAllocationCapped() override;
-  void checkpoint() override;
-  void checkpoint(const int db_id, const int tb_id) override;
   AbstractBuffer* alloc(const size_t num_bytes) override;
   void free(AbstractBuffer* buffer) override;
   MgrType getMgrType() override;
   std::string getStringMgrType() override;
   size_t getNumChunks() override;
-  void removeTableRelatedDS(const int db_id, const int table_id) override;
 
-  const DictDescriptor* getDictMetadata(int db_id,
-                                        int dict_id,
-                                        bool load_dict = true) override;
+  const DictDescriptor* getDictMetadata(int dict_id, bool load_dict = true);
 
   TableFragmentsInfo getTableMetadata(int db_id, int table_id) const override;
 
@@ -68,6 +64,7 @@ class PersistentStorageMgr : public AbstractBufferMgr {
   bool isForeignStorage(const ChunkKey& chunk_key) const;
   AbstractBufferMgr* getStorageMgrForTableKey(const ChunkKey& table_key) const;
   AbstractBufferMgr* getStorageMgr(int db_id) const;
+  bool hasStorageMgr(int db_id) const;
   bool isChunkPrefixCacheable(const ChunkKey& chunk_prefix) const;
   int recoverDataWrapperIfCachedAndGetHighestFragId(const ChunkKey& table_key);
 

@@ -22,7 +22,7 @@
 #include "DataMgr/DataMgr.h"
 #include "BufferMgr/CpuBufferMgr/CpuBufferMgr.h"
 #include "BufferMgr/CpuBufferMgr/TieredCpuBufferMgr.h"
-#include "BufferMgr/GpuCudaBufferMgr/GpuCudaBufferMgr.h"
+#include "BufferMgr/GpuBufferMgr/GpuBufferMgr.h"
 #include "CudaMgr/CudaMgr.h"
 #include "PersistentStorageMgr/PersistentStorageMgr.h"
 
@@ -36,42 +36,34 @@
 #include <algorithm>
 #include <limits>
 
-extern bool g_enable_fsi;
-bool g_enable_tiered_cpu_mem{false};
-size_t g_pmem_size{0};
-
 namespace Data_Namespace {
 
-DataMgr::DataMgr(const std::string& dataDir,
+DataMgr::DataMgr(const Config& config,
                  const SystemParameters& system_parameters,
-                 std::unique_ptr<CudaMgr_Namespace::CudaMgr> cudaMgr,
-                 const bool useGpus,
+                 std::map<GpuMgrName, std::unique_ptr<GpuMgr>>&& gpuMgrs,
                  const size_t reservedGpuMem,
                  const size_t numReaderThreads)
-    : cudaMgr_(std::move(cudaMgr))
-    , dataDir_(dataDir)
+    : gpuMgrContext_(nullptr)
     , hasGpus_(false)
     , reservedGpuMem_(reservedGpuMem)
     , buffer_provider_(std::make_unique<DataMgrBufferProvider>(this))
     , data_provider_(std::make_unique<DataMgrDataProvider>(this)) {
-  if (useGpus) {
-    if (cudaMgr_) {
-      hasGpus_ = true;
-    } else {
-      LOG(ERROR) << "CudaMgr instance is invalid, falling back to CPU-only mode.";
-      hasGpus_ = false;
+  for (auto& pair : gpuMgrs) {
+    if (pair.second) {
+      CHECK_EQ(pair.first, pair.second->getName()) << "Inconsistent map was passed";
+      gpuMgrs_[pair.first] = std::move(pair.second);
     }
-  } else {
-    // NOTE: useGpus == false with a valid cudaMgr is a potentially valid configuration.
-    // i.e. QueryEngine can be set to cpu-only for a cuda-enabled build, but still have
-    // rendering enabled. The renderer would require a CudaMgr in this case, in addition
-    // to a GpuCudaBufferMgr for cuda-backed thrust allocations.
-    // We're still setting hasGpus_ to false in that case tho to enforce cpu-only query
-    // execution.
+  }
+  if (!gpuMgrs_.size()) {
+    LOG(INFO) << "None of the passed GpuMgr instances is valid, falling back to "
+                 "CPU-only mode.";
     hasGpus_ = false;
+  } else {
+    gpuMgrContext_ = gpuMgrs_.begin()->second.get();
+    hasGpus_ = true;
   }
 
-  populateMgrs(system_parameters, numReaderThreads);
+  populateMgrs(config, system_parameters, numReaderThreads);
   createTopLevelMetadata();
 }
 
@@ -165,15 +157,18 @@ size_t DataMgr::getTotalSystemMemory() {
 }
 
 void DataMgr::allocateCpuBufferMgr(int32_t device_id,
+                                   bool enable_tiered_cpu_mem,
                                    size_t total_cpu_size,
                                    size_t minCpuSlabSize,
                                    size_t maxCpuSlabSize,
                                    size_t page_size,
                                    const CpuTierSizeVector& cpu_tier_sizes) {
-  if (g_enable_tiered_cpu_mem) {
+  GpuMgr* gpuMgr = getGpuMgr();
+
+  if (enable_tiered_cpu_mem) {
     bufferMgrs_[1].push_back(new Buffer_Namespace::TieredCpuBufferMgr(0,
                                                                       total_cpu_size,
-                                                                      cudaMgr_.get(),
+                                                                      gpuMgr,
                                                                       minCpuSlabSize,
                                                                       maxCpuSlabSize,
                                                                       page_size,
@@ -182,7 +177,7 @@ void DataMgr::allocateCpuBufferMgr(int32_t device_id,
   } else {
     bufferMgrs_[1].push_back(new Buffer_Namespace::CpuBufferMgr(0,
                                                                 total_cpu_size,
-                                                                cudaMgr_.get(),
+                                                                gpuMgr,
                                                                 minCpuSlabSize,
                                                                 maxCpuSlabSize,
                                                                 page_size,
@@ -190,28 +185,14 @@ void DataMgr::allocateCpuBufferMgr(int32_t device_id,
   }
 }
 
-// This function exists for testing purposes so that we can test a reset of the cache.
-void DataMgr::resetPersistentStorage(const size_t num_reader_threads,
-                                     const SystemParameters& sys_params) {
-  int numLevels = bufferMgrs_.size();
-  for (int level = numLevels - 1; level >= 0; --level) {
-    for (size_t device = 0; device < bufferMgrs_[level].size(); device++) {
-      delete bufferMgrs_[level][device];
-    }
-  }
-  bufferMgrs_.clear();
-  populateMgrs(sys_params, num_reader_threads);
-  createTopLevelMetadata();
-}
-
-void DataMgr::populateMgrs(const SystemParameters& system_parameters,
+void DataMgr::populateMgrs(const Config& config,
+                           const SystemParameters& system_parameters,
                            const size_t userSpecifiedNumReaderThreads) {
   // no need for locking, as this is only called in the constructor
   bufferMgrs_.resize(2);
-  bufferMgrs_[0].push_back(
-      new PersistentStorageMgr(dataDir_, userSpecifiedNumReaderThreads));
+  bufferMgrs_[0].push_back(new PersistentStorageMgr(userSpecifiedNumReaderThreads));
 
-  levelSizes_.push_back(1);
+  levelSizes_.push_back(1);  // levelSizes_[DISK_LEVEL] = 1
   size_t page_size{512};
   size_t cpuBufferSize = system_parameters.cpu_buffer_mem_bytes;
   if (cpuBufferSize == 0) {  // if size is not specified
@@ -233,10 +214,10 @@ void DataMgr::populateMgrs(const SystemParameters& system_parameters,
   CpuTierSizeVector cpu_tier_sizes(numCpuTiers, 0);
   cpu_tier_sizes[CpuTier::DRAM] = cpuBufferSize;
 
-  if (g_enable_tiered_cpu_mem) {
-    cpu_tier_sizes[CpuTier::PMEM] = g_pmem_size;
-    LOG(INFO) << "Max memory pool size for PMEM is " << (float)g_pmem_size / (1024 * 1024)
-              << "MB";
+  if (config.mem.cpu.enable_tiered_cpu_mem) {
+    cpu_tier_sizes[CpuTier::PMEM] = config.mem.cpu.pmem_size;
+    LOG(INFO) << "Max memory pool size for PMEM is "
+              << (float)config.mem.cpu.pmem_size / (1024 * 1024) << "MB";
   }
 
   size_t total_cpu_size = 0;
@@ -244,20 +225,46 @@ void DataMgr::populateMgrs(const SystemParameters& system_parameters,
     total_cpu_size += cpu_tier_size;
   }
 
-  if (hasGpus_ || cudaMgr_) {
+  if (hasGpus_) {
+    // TODO: iterate over the vector to populate buffers one by one?
+    // in order to support multiple gpuMgrs we have to distinctly store their buffer
+    // managers and switch to them in `bufferMgrs_` when the gpuMgr context changes
+    CHECK_EQ(gpuMgrs_.size(), (size_t)1)
+        << "Multiple GPU managers handling is not implemented yet.";
+    GpuMgrName mgrName = getGpuMgr()->getName();
+
     LOG(INFO) << "Reserved GPU memory is " << (float)reservedGpuMem_ / (1024 * 1024)
               << "MB includes render buffer allocation";
     bufferMgrs_.resize(3);
-    allocateCpuBufferMgr(
-        0, total_cpu_size, minCpuSlabSize, maxCpuSlabSize, page_size, cpu_tier_sizes);
+    allocateCpuBufferMgr(0,
+                         config.mem.cpu.enable_tiered_cpu_mem,
+                         total_cpu_size,
+                         minCpuSlabSize,
+                         maxCpuSlabSize,
+                         page_size,
+                         cpu_tier_sizes);
 
-    levelSizes_.push_back(1);
-    int numGpus = cudaMgr_->getDeviceCount();
+    levelSizes_.push_back(1);  // levelSizes_[CPU_LEVEL] = 1
+    int numGpus = getGpuMgr()->getDeviceCount();
     for (int gpuNum = 0; gpuNum < numGpus; ++gpuNum) {
-      size_t gpuMaxMemSize =
-          system_parameters.gpu_buffer_mem_bytes != 0
-              ? system_parameters.gpu_buffer_mem_bytes
-              : (cudaMgr_->getDeviceProperties(gpuNum)->globalMem) - (reservedGpuMem_);
+      size_t deviceMemSize = 0;
+      // TODO: get rid of manager-specific branches by introducing some kind of device
+      // properties in GpuMgr
+      switch (mgrName) {
+        case GpuMgrName::CUDA:
+          deviceMemSize = getCudaMgr()->getDeviceProperties(gpuNum)->globalMem;
+          break;
+        case GpuMgrName::L0:
+          deviceMemSize = 1024 * 4 * 1024;  // 4MB for now
+          page_size = 4096UL;
+          break;
+        default:
+          CHECK(false);
+      }
+
+      size_t gpuMaxMemSize = system_parameters.gpu_buffer_mem_bytes != 0
+                                 ? system_parameters.gpu_buffer_mem_bytes
+                                 : deviceMemSize - reservedGpuMem_;
       size_t minGpuSlabSize =
           std::min(system_parameters.min_gpu_slab_size, gpuMaxMemSize);
       minGpuSlabSize = (minGpuSlabSize / page_size) * page_size;
@@ -270,19 +277,25 @@ void DataMgr::populateMgrs(const SystemParameters& system_parameters,
                 << (float)maxGpuSlabSize / (1024 * 1024) << "MB";
       LOG(INFO) << "Max memory pool size for GPU " << gpuNum << " is "
                 << (float)gpuMaxMemSize / (1024 * 1024) << "MB";
-      bufferMgrs_[2].push_back(new Buffer_Namespace::GpuCudaBufferMgr(gpuNum,
-                                                                      gpuMaxMemSize,
-                                                                      cudaMgr_.get(),
-                                                                      minGpuSlabSize,
-                                                                      maxGpuSlabSize,
-                                                                      page_size,
-                                                                      bufferMgrs_[1][0]));
+
+      bufferMgrs_[2].push_back(new Buffer_Namespace::GpuBufferMgr(gpuNum,
+                                                                  gpuMaxMemSize,
+                                                                  getGpuMgr(),
+                                                                  minGpuSlabSize,
+                                                                  maxGpuSlabSize,
+                                                                  page_size,
+                                                                  bufferMgrs_[1][0]));
     }
-    levelSizes_.push_back(numGpus);
+    levelSizes_.push_back(numGpus);  // levelSizes_[GPU_LEVEL] = numGpus
   } else {
-    allocateCpuBufferMgr(
-        0, total_cpu_size, minCpuSlabSize, maxCpuSlabSize, page_size, cpu_tier_sizes);
-    levelSizes_.push_back(1);
+    allocateCpuBufferMgr(0,
+                         config.mem.cpu.enable_tiered_cpu_mem,
+                         total_cpu_size,
+                         minCpuSlabSize,
+                         maxCpuSlabSize,
+                         page_size,
+                         cpu_tier_sizes);
+    levelSizes_.push_back(1);  // levelSizes_[CPU_LEVEL] = 1
   }
 }
 
@@ -292,77 +305,32 @@ void DataMgr::convertDB(const std::string basePath) {
 
 void DataMgr::createTopLevelMetadata() const {}
 
-std::vector<MemoryInfo> DataMgr::getMemoryInfo(const MemoryLevel memLevel) {
-  std::lock_guard<std::mutex> buffer_lock(buffer_access_mutex_);
-
-  std::vector<MemoryInfo> mem_info;
+std::vector<Buffer_Namespace::MemoryInfo> DataMgr::getMemoryInfo(
+    const MemoryLevel memLevel) {
+  std::vector<Buffer_Namespace::MemoryInfo> mem_info;
   if (memLevel == MemoryLevel::CPU_LEVEL) {
     Buffer_Namespace::CpuBufferMgr* cpu_buffer =
         dynamic_cast<Buffer_Namespace::CpuBufferMgr*>(
             bufferMgrs_[MemoryLevel::CPU_LEVEL][0]);
     CHECK(cpu_buffer);
-    MemoryInfo mi;
-
-    mi.pageSize = cpu_buffer->getPageSize();
-    mi.maxNumPages = cpu_buffer->getMaxSize() / mi.pageSize;
-    mi.isAllocationCapped = cpu_buffer->isAllocationCapped();
-    mi.numPageAllocated = cpu_buffer->getAllocated() / mi.pageSize;
-
-    const auto& slab_segments = cpu_buffer->getSlabSegments();
-    for (size_t slab_num = 0; slab_num < slab_segments.size(); ++slab_num) {
-      for (auto segment : slab_segments[slab_num]) {
-        MemoryData md;
-        md.slabNum = slab_num;
-        md.startPage = segment.start_page;
-        md.numPages = segment.num_pages;
-        md.touch = segment.last_touched;
-        md.memStatus = segment.mem_status;
-        md.chunk_key.insert(
-            md.chunk_key.end(), segment.chunk_key.begin(), segment.chunk_key.end());
-        mi.nodeMemoryData.push_back(md);
-      }
-    }
-    mem_info.push_back(mi);
+    mem_info.push_back(cpu_buffer->getMemoryInfo());
   } else if (hasGpus_) {
-    int numGpus = cudaMgr_->getDeviceCount();
+    int numGpus = getGpuMgr()->getDeviceCount();
     for (int gpuNum = 0; gpuNum < numGpus; ++gpuNum) {
-      Buffer_Namespace::GpuCudaBufferMgr* gpu_buffer =
-          dynamic_cast<Buffer_Namespace::GpuCudaBufferMgr*>(
+      Buffer_Namespace::BufferMgr* gpu_buffer =
+          dynamic_cast<Buffer_Namespace::BufferMgr*>(
               bufferMgrs_[MemoryLevel::GPU_LEVEL][gpuNum]);
       CHECK(gpu_buffer);
-      MemoryInfo mi;
-
-      mi.pageSize = gpu_buffer->getPageSize();
-      mi.maxNumPages = gpu_buffer->getMaxSize() / mi.pageSize;
-      mi.isAllocationCapped = gpu_buffer->isAllocationCapped();
-      mi.numPageAllocated = gpu_buffer->getAllocated() / mi.pageSize;
-
-      const auto& slab_segments = gpu_buffer->getSlabSegments();
-      for (size_t slab_num = 0; slab_num < slab_segments.size(); ++slab_num) {
-        for (auto segment : slab_segments[slab_num]) {
-          MemoryData md;
-          md.slabNum = slab_num;
-          md.startPage = segment.start_page;
-          md.numPages = segment.num_pages;
-          md.touch = segment.last_touched;
-          md.chunk_key.insert(
-              md.chunk_key.end(), segment.chunk_key.begin(), segment.chunk_key.end());
-          md.memStatus = segment.mem_status;
-          mi.nodeMemoryData.push_back(md);
-        }
-      }
-      mem_info.push_back(mi);
+      mem_info.push_back(gpu_buffer->getMemoryInfo());
     }
   }
   return mem_info;
 }
 
 std::string DataMgr::dumpLevel(const MemoryLevel memLevel) {
-  std::lock_guard<std::mutex> buffer_lock(buffer_access_mutex_);
-
   // if gpu we need to iterate through all the buffermanagers for each card
   if (memLevel == MemoryLevel::GPU_LEVEL) {
-    int numGpus = cudaMgr_->getDeviceCount();
+    int numGpus = getGpuMgr()->getDeviceCount();
     std::ostringstream tss;
     for (int gpuNum = 0; gpuNum < numGpus; ++gpuNum) {
       tss << bufferMgrs_[memLevel][gpuNum]->printSlabs();
@@ -374,12 +342,10 @@ std::string DataMgr::dumpLevel(const MemoryLevel memLevel) {
 }
 
 void DataMgr::clearMemory(const MemoryLevel memLevel) {
-  std::lock_guard<std::mutex> buffer_lock(buffer_access_mutex_);
-
   // if gpu we need to iterate through all the buffermanagers for each card
   if (memLevel == MemoryLevel::GPU_LEVEL) {
-    if (cudaMgr_) {
-      int numGpus = cudaMgr_->getDeviceCount();
+    if (hasGpus_) {
+      int numGpus = getGpuMgr()->getDeviceCount();
       for (int gpuNum = 0; gpuNum < numGpus; ++gpuNum) {
         LOG(INFO) << "clear slabs on gpu " << gpuNum;
         auto buffer_mgr_for_gpu =
@@ -401,13 +367,37 @@ void DataMgr::clearMemory(const MemoryLevel memLevel) {
 bool DataMgr::isBufferOnDevice(const ChunkKey& key,
                                const MemoryLevel memLevel,
                                const int deviceId) {
-  std::lock_guard<std::mutex> buffer_lock(buffer_access_mutex_);
   return bufferMgrs_[memLevel][deviceId]->isBufferOnDevice(key);
+}
+
+GpuMgr* DataMgr::getGpuMgr(GpuMgrName name) const {
+  if (!hasGpus_) {
+    return nullptr;
+  }
+
+  GpuMgr* res = nullptr;
+  try {
+    res = gpuMgrs_.at(name).get();
+  } catch (const std::out_of_range& e) {
+    return nullptr;
+  }
+
+  CHECK_EQ(res->getName(), name) << "Mapping of GPU managers names is incorrect";
+  return res;
+}
+
+void DataMgr::setGpuMgrContext(GpuMgrName name) {
+  CHECK_LT(gpuMgrs_.size(), (size_t)2)
+      << "Switching context with multiple GPU managers is not yet supported";
+  GpuMgr* gpuMgr = getGpuMgr(name);
+  CHECK(gpuMgr);
+  // TODO: modify `bufferMgrs_` so the `bufferMgrs[GPU_LEVEL]` point to the selected
+  // manager's buffers
+  gpuMgrContext_ = gpuMgr;
 }
 
 void DataMgr::getChunkMetadataVecForKeyPrefix(ChunkMetadataVector& chunkMetadataVec,
                                               const ChunkKey& keyPrefix) {
-  std::lock_guard<std::mutex> buffer_lock(buffer_access_mutex_);
   bufferMgrs_[0][0]->getChunkMetadataVecForKeyPrefix(chunkMetadataVec, keyPrefix);
 }
 
@@ -415,7 +405,6 @@ AbstractBuffer* DataMgr::createChunkBuffer(const ChunkKey& key,
                                            const MemoryLevel memoryLevel,
                                            const int deviceId,
                                            const size_t page_size) {
-  std::lock_guard<std::mutex> buffer_lock(buffer_access_mutex_);
   int level = static_cast<int>(memoryLevel);
   return bufferMgrs_[level][deviceId]->createBuffer(key, page_size);
 }
@@ -424,7 +413,6 @@ AbstractBuffer* DataMgr::getChunkBuffer(const ChunkKey& key,
                                         const MemoryLevel memoryLevel,
                                         const int deviceId,
                                         const size_t numBytes) {
-  std::lock_guard<std::mutex> buffer_lock(buffer_access_mutex_);
   const auto level = static_cast<size_t>(memoryLevel);
   CHECK_LT(level, levelSizes_.size());     // make sure we have a legit buffermgr
   CHECK_LT(deviceId, levelSizes_[level]);  // make sure we have a legit buffermgr
@@ -432,8 +420,6 @@ AbstractBuffer* DataMgr::getChunkBuffer(const ChunkKey& key,
 }
 
 void DataMgr::deleteChunksWithPrefix(const ChunkKey& keyPrefix) {
-  std::lock_guard<std::mutex> buffer_lock(buffer_access_mutex_);
-
   int numLevels = bufferMgrs_.size();
   for (int level = numLevels - 1; level >= 0; --level) {
     for (int device = 0; device < levelSizes_[level]; ++device) {
@@ -445,8 +431,6 @@ void DataMgr::deleteChunksWithPrefix(const ChunkKey& keyPrefix) {
 // only deletes the chunks at the given memory level
 void DataMgr::deleteChunksWithPrefix(const ChunkKey& keyPrefix,
                                      const MemoryLevel memLevel) {
-  std::lock_guard<std::mutex> buffer_lock(buffer_access_mutex_);
-
   if (bufferMgrs_.size() <= memLevel) {
     return;
   }
@@ -458,14 +442,12 @@ void DataMgr::deleteChunksWithPrefix(const ChunkKey& keyPrefix,
 AbstractBuffer* DataMgr::alloc(const MemoryLevel memoryLevel,
                                const int deviceId,
                                const size_t numBytes) {
-  std::lock_guard<std::mutex> buffer_lock(buffer_access_mutex_);
   const auto level = static_cast<int>(memoryLevel);
   CHECK_LT(deviceId, levelSizes_[level]);
   return bufferMgrs_[level][deviceId]->alloc(numBytes);
 }
 
 void DataMgr::free(AbstractBuffer* buffer) {
-  std::lock_guard<std::mutex> buffer_lock(buffer_access_mutex_);
   int level = static_cast<int>(buffer->getType());
   bufferMgrs_[level][buffer->getDeviceId()]->free(buffer);
 }
@@ -483,46 +465,6 @@ void DataMgr::copy(AbstractBuffer* destBuffer, AbstractBuffer* srcBuffer) {
 // void DataMgr::copy(AbstractBuffer *destBuffer, const AbstractBuffer *srcBuffer, const
 // size_t numBytes, const size_t destOffset, const size_t srcOffset) {
 //} /
-
-void DataMgr::checkpoint(const int db_id, const int tb_id) {
-  // TODO(adb): do we need a buffer mgr lock here?
-  // MAT Yes to reduce Parallel Executor TSAN issues (and correctness for now)
-  std::lock_guard<std::mutex> buffer_lock(buffer_access_mutex_);
-  for (auto levelIt = bufferMgrs_.rbegin(); levelIt != bufferMgrs_.rend(); ++levelIt) {
-    // use reverse iterator so we start at GPU level, then CPU then DISK
-    for (auto deviceIt = levelIt->begin(); deviceIt != levelIt->end(); ++deviceIt) {
-      (*deviceIt)->checkpoint(db_id, tb_id);
-    }
-  }
-}
-
-void DataMgr::checkpoint(const int db_id,
-                         const int table_id,
-                         const MemoryLevel memory_level) {
-  std::lock_guard<std::mutex> buffer_lock(buffer_access_mutex_);
-  CHECK_LT(static_cast<size_t>(memory_level), bufferMgrs_.size());
-  CHECK_LT(static_cast<size_t>(memory_level), levelSizes_.size());
-  for (int device_id = 0; device_id < levelSizes_[memory_level]; device_id++) {
-    bufferMgrs_[memory_level][device_id]->checkpoint(db_id, table_id);
-  }
-}
-
-void DataMgr::checkpoint() {
-  // TODO(adb): SAA
-  // MAT Yes to reduce Parallel Executor TSAN issues (and correctness for now)
-  std::lock_guard<std::mutex> buffer_lock(buffer_access_mutex_);
-  for (auto levelIt = bufferMgrs_.rbegin(); levelIt != bufferMgrs_.rend(); ++levelIt) {
-    // use reverse iterator so we start at GPU level, then CPU then DISK
-    for (auto deviceIt = levelIt->begin(); deviceIt != levelIt->end(); ++deviceIt) {
-      (*deviceIt)->checkpoint();
-    }
-  }
-}
-
-void DataMgr::removeTableRelatedDS(const int db_id, const int tb_id) {
-  std::lock_guard<std::mutex> buffer_lock(buffer_access_mutex_);
-  bufferMgrs_[0][0]->removeTableRelatedDS(db_id, tb_id);
-}
 
 void DataMgr::setTableEpoch(const int db_id, const int tb_id, const int start_epoch) {
   UNREACHABLE();
@@ -556,10 +498,8 @@ Buffer_Namespace::CpuBufferMgr* DataMgr::getCpuBufferMgr() const {
   return dynamic_cast<Buffer_Namespace::CpuBufferMgr*>(bufferMgrs_[1][0]);
 }
 
-const DictDescriptor* DataMgr::getDictMetadata(int db_id,
-                                               int dict_id,
-                                               bool load_dict) const {
-  return getPersistentStorageMgr()->getDictMetadata(db_id, dict_id, load_dict);
+const DictDescriptor* DataMgr::getDictMetadata(int dict_id, bool load_dict) const {
+  return getPersistentStorageMgr()->getDictMetadata(dict_id, load_dict);
 }
 
 TableFragmentsInfo DataMgr::getTableMetadata(int db_id, int table_id) const {

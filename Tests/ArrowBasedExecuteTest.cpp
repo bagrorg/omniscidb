@@ -21,12 +21,12 @@
 #include "QueryEngine/ArrowResultSet.h"
 #include "QueryEngine/Execute.h"
 #include "QueryEngine/ResultSetReductionJIT.h"
-#include "Shared/Globals.h"
 #include "Shared/scope.h"
 
 #include <gtest/gtest.h>
 #include <boost/algorithm/string.hpp>
 #include <boost/any.hpp>
+#include <boost/crc.hpp>
 #include <boost/program_options.hpp>
 
 #include <cmath>
@@ -40,30 +40,7 @@ using namespace TestHelpers::ArrowSQLRunner;
 
 bool g_aggregator{false};
 
-extern bool g_enable_smem_group_by;
-extern bool g_allow_cpu_retry;
-extern bool g_allow_query_step_cpu_retry;
-extern bool g_enable_watchdog;
-extern bool g_skip_intermediate_count;
-extern bool g_enable_left_join_filter_hoisting;
-extern bool g_from_table_reordering;
-extern bool g_inf_div_by_zero;
-extern bool g_null_div_by_zero;
-extern bool g_enable_heterogeneous_execution;
-
-extern size_t g_big_group_threshold;
-extern unsigned g_trivial_loop_join_threshold;
-extern bool g_enable_overlaps_hashjoin;
-extern double g_gpu_mem_limit_percent;
-extern size_t g_parallel_top_min;
-extern size_t g_parallel_top_max;
-extern size_t g_constrained_by_in_threshold;
-
-extern bool g_enable_window_functions;
 extern bool g_enable_calcite_view_optimize;
-extern bool g_enable_bump_allocator;
-extern bool g_enable_interop;
-extern bool g_enable_union;
 
 extern bool g_is_test_env;
 
@@ -2745,15 +2722,15 @@ TEST_F(Select, GroupBy) {
     c("SELECT i, b FROM test_ranges GROUP BY i, b;", dt);
 
     {
-      const auto big_group_threshold = g_big_group_threshold;
+      const auto big_group_threshold = config().exec.group_by.big_group_threshold;
       ScopeGuard reset_big_group_threshold = [&big_group_threshold] {
-        g_big_group_threshold = big_group_threshold;
+        config().exec.group_by.big_group_threshold = big_group_threshold;
       };
-      g_big_group_threshold = 1;
+      config().exec.group_by.big_group_threshold = 1;
       c("SELECT d, COUNT(*) FROM test GROUP BY d ORDER BY d DESC LIMIT 10;", dt);
     }
 
-    if (g_enable_columnar_output) {
+    if (config().rs.enable_columnar_output) {
       // TODO: Fixup the tests below when running with columnar output enabled
       continue;
     }
@@ -3035,11 +3012,11 @@ TEST_F(Select, Arrays) {
                        dt),
         std::vector<int64_t>({1, 0, 1, 0, 1, 0}));
 
-    const auto watchdog_state = g_enable_watchdog;
+    const auto watchdog_state = config().exec.watchdog.enable;
     ScopeGuard reset_Watchdog_state = [&watchdog_state] {
-      g_enable_watchdog = watchdog_state;
+      config().exec.watchdog.enable = watchdog_state;
     };
-    g_enable_watchdog = true;
+    config().exec.watchdog.enable = true;
     // throw exception when comparing full array joins when watchdog is on
     EXPECT_THROW(run_simple_agg("SELECT COUNT(1) FROM array_test t1, array_test t2 WHERE "
                                 "t1.arr_str[1] > t2.arr_str[1];",
@@ -3079,7 +3056,7 @@ TEST_F(Select, Arrays) {
     // translation maps, as well as much faster support for this class of queries
     // with watchdog off (distributed and single-node).
 
-    g_enable_watchdog = false;
+    config().exec.watchdog.enable = false;
 
     EXPECT_EQ(int64_t(190),
               v<int64_t>(run_simple_agg(
@@ -4284,9 +4261,9 @@ TEST_F(Select, MultiStepQueries) {
   for (auto dt : {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU}) {
     SKIP_NO_GPU();
 
-    const auto skip_intermediate_count = g_skip_intermediate_count;
+    const auto skip_intermediate_count = config().opts.skip_intermediate_count;
     ScopeGuard reset_skip_intermediate_count = [&skip_intermediate_count] {
-      g_skip_intermediate_count = skip_intermediate_count;
+      config().opts.skip_intermediate_count = skip_intermediate_count;
     };
 
     c("SELECT z, (z * SUM(x)) / SUM(y) + 1 FROM test GROUP BY z ORDER BY z;", dt);
@@ -4486,20 +4463,36 @@ TEST_F(Select, Case) {
     c(R"(SELECT CASE WHEN x = 8 THEN 'b' WHEN x = 7 THEN str END AS case_group, COUNT(*) AS n FROM test WHERE CASE WHEN x = 7 THEN str WHEN x = 8 THEN fixed_str ELSE 'bar' END = str GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
       dt);
 
+    // Ensure that transients added during case-statement string dictionary column casts
+    // are propogated to aggregator in distributed mode
+
+    c(R"(SELECT CASE WHEN x = 8 THEN str WHEN x = 7 THEN ss END AS case_expr FROM test ORDER BY case_expr ASC NULLS FIRST;)",
+      dt);
+    c(R"(SELECT CASE WHEN x = 8 THEN str WHEN x = 7 THEN ss END AS case_group, COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST;)",
+      dt);
+    c(R"(SELECT CASE WHEN x = 8 THEN str WHEN x = 7 AND fixed_str IS NOT NULL THEN fixed_str ELSE ss END AS case_group, COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST;)",
+      dt);
+    c(R"(SELECT CASE WHEN x = 8 THEN str WHEN x = 7 AND fixed_str IS NOT NULL THEN 'a' ELSE ss END AS case_group, COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST;)",
+      dt);
+    c(R"(SELECT CASE WHEN x = 8 THEN ss WHEN x = 7 AND fixed_str IS NOT NULL THEN ss ELSE fixed_str END AS case_group, COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST;)",
+      dt);
+    c(R"(SELECT CASE WHEN x = 8 THEN ss WHEN x = 7 AND fixed_str IS NOT NULL THEN ss ELSE fixed_str END AS case_group, COUNT(*) AS n FROM test WHERE CASE WHEN x = 7 THEN ss ELSE str END = 'fish' GROUP BY case_group ORDER BY case_group ASC NULLS FIRST;)",
+      dt);
+
     EXPECT_ANY_THROW(
         c(R"(SELECT CASE WHEN x = 8 THEN str ELSE (str = fixed_str) END AS case_group,
      COUNT(*) AS n FROM test GROUP BY case_group ORDER BY case_group ASC NULLS FIRST, n ASC NULLS FIRST;)",
           dt));  // Cast from BOOLEAN to TEXT not supported
 
     {
-      const auto watchdog_state = g_enable_watchdog;
-      g_enable_watchdog = true;
+      const auto watchdog_state = config().exec.watchdog.enable;
+      config().exec.watchdog.enable = true;
       ScopeGuard reset_Watchdog_state = [&watchdog_state] {
-        g_enable_watchdog = watchdog_state;
+        config().exec.watchdog.enable = watchdog_state;
       };
 
       // casts not yet supported in distributed mode
-      g_enable_watchdog = false;
+      config().exec.watchdog.enable = false;
       c(R"(SELECT CASE WHEN x = 7 THEN 'a' WHEN x = 8 then str ELSE fixed_str END FROM test ORDER BY 1;)",
         dt);
       c(R"(SELECT CASE WHEN str = 'foo' THEN real_str WHEN str = 'bar' THEN 'b' ELSE null_str END FROM test ORDER BY 1)",
@@ -4652,16 +4645,20 @@ TEST_F(Select, Case) {
             "denominator, y FROM test GROUP BY y ORDER BY y) a GROUP BY c HAVING c > 0",
             dt)));
 
-    const auto constrained_by_in_threshold_state = g_constrained_by_in_threshold;
-    g_constrained_by_in_threshold = 0;
+    const auto constrained_by_in_threshold_state =
+        config().opts.constrained_by_in_threshold;
+    config().opts.constrained_by_in_threshold = 0;
     ScopeGuard reset_constrained_by_in_threshold = [&constrained_by_in_threshold_state] {
-      g_constrained_by_in_threshold = constrained_by_in_threshold_state;
+      config().opts.constrained_by_in_threshold = constrained_by_in_threshold_state;
     };
     c("SELECT fixed_str AS key0, str as key1, count(*) as val FROM test WHERE "
       "((fixed_str IN (SELECT fixed_str FROM test GROUP BY fixed_str))) GROUP BY key0, "
       "key1 ORDER BY val desc;",
       dt);
     c("SELECT CASE str WHEN 'foo' THEN 'truncated' ELSE 'bar' END trunc"
+      " FROM test ORDER BY trunc;",
+      dt);
+    c("SELECT CASE str WHEN 'foo' THEN 'bar' ELSE 'truncated' END trunc"
       " FROM test ORDER BY trunc;",
       dt);
   }
@@ -4994,19 +4991,19 @@ TEST_F(Select, StringCompare) {
     c("SELECT COUNT(*) FROM test WHERE 'ba' > shared_dict;", dt);
     c("SELECT COUNT(*) FROM test WHERE 'bar' > shared_dict;", dt);
 
-    const auto watchdog_state = g_enable_watchdog;
+    const auto watchdog_state = config().exec.watchdog.enable;
     ScopeGuard reset_Watchdog_state = [&watchdog_state] {
-      g_enable_watchdog = watchdog_state;
+      config().exec.watchdog.enable = watchdog_state;
     };
 
-    g_enable_watchdog = true;
+    config().exec.watchdog.enable = true;
 
     EXPECT_THROW(run_simple_agg("SELECT COUNT(*) FROM test, test_inner WHERE "
                                 "test.shared_dict < test_inner.str",
                                 dt),
                  std::runtime_error);
 
-    g_enable_watchdog = false;
+    config().exec.watchdog.enable = false;
 
     c("SELECT COUNT(*) FROM test, test_inner WHERE "
       "test.shared_dict < test_inner.str",
@@ -5019,22 +5016,23 @@ TEST_F(Select, DictionaryStringEquality) {
   // execute between two text columns even when they do not share
   // dictionaries, with watchdog both on and off and without punting
   // to CPU
-  const auto watchdog_state = g_enable_watchdog;
-  const auto cpu_retry_state = g_allow_cpu_retry;
-  const auto cpu_step_retry_state = g_allow_query_step_cpu_retry;
+  const auto watchdog_state = config().exec.watchdog.enable;
+  const auto cpu_retry_state = config().exec.heterogeneous.allow_cpu_retry;
+  const auto cpu_step_retry_state =
+      config().exec.heterogeneous.allow_query_step_cpu_retry;
 
   ScopeGuard reset_global_state =
       [&watchdog_state, &cpu_retry_state, &cpu_step_retry_state] {
-        g_enable_watchdog = watchdog_state;
-        g_allow_cpu_retry = cpu_retry_state;
-        g_allow_query_step_cpu_retry = cpu_step_retry_state;
+        config().exec.watchdog.enable = watchdog_state;
+        config().exec.heterogeneous.allow_cpu_retry = cpu_retry_state;
+        config().exec.heterogeneous.allow_query_step_cpu_retry = cpu_step_retry_state;
       };
 
-  g_allow_cpu_retry = false;
-  g_allow_query_step_cpu_retry = false;
+  config().exec.heterogeneous.allow_cpu_retry = false;
+  config().exec.heterogeneous.allow_query_step_cpu_retry = false;
 
   for (auto enable_watchdog : {true, false}) {
-    g_enable_watchdog = enable_watchdog;
+    config().exec.watchdog.enable = enable_watchdog;
     for (auto dt : {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU}) {
       SKIP_NO_GPU();
       c("SELECT COUNT(*) FROM test WHERE str = fixed_str", dt);
@@ -7162,6 +7160,26 @@ TEST_F(Select, TimeRedux) {
         v<int64_t>(run_simple_agg(
             R"(SELECT COUNT(*) FROM test WHERE o = (DATE '1999-09-01') OR CAST(o AS TIMESTAMP) = (TIMESTAMP '1999-09-09 00:00:00.000');)",
             dt)));
+    EXPECT_EQ(
+        15,
+        v<int64_t>(run_simple_agg(
+            R"(SELECT COUNT(*) FROM test WHERE CAST(m AS DATE) = (DATE '2014-12-13');)",
+            dt)));
+    EXPECT_EQ(
+        15,
+        v<int64_t>(run_simple_agg(
+            R"(SELECT COUNT(*) FROM test WHERE CAST(m_3 AS DATE) = (DATE '2014-12-13');)",
+            dt)));
+    EXPECT_EQ(
+        10,
+        v<int64_t>(run_simple_agg(
+            R"(SELECT COUNT(*) FROM test WHERE CAST(m_6 AS DATE) = (DATE '1999-07-11');)",
+            dt)));
+    EXPECT_EQ(
+        10,
+        v<int64_t>(run_simple_agg(
+            R"(SELECT COUNT(*) FROM test WHERE CAST(m_9 AS DATE) = (DATE '2006-04-26');)",
+            dt)));
   }
 }
 
@@ -7216,7 +7234,7 @@ TEST_F(Select, DivByZero) {
 }
 
 TEST_F(Select, ReturnNullFromDivByZero) {
-  g_null_div_by_zero = true;
+  config().exec.codegen.null_div_by_zero = true;
   for (auto dt : {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU}) {
     SKIP_NO_GPU();
     c("SELECT x / 0 FROM test;", dt);
@@ -7233,7 +7251,7 @@ TEST_F(Select, ReturnNullFromDivByZero) {
 }
 
 TEST_F(Select, ReturnInfFromDivByZero) {
-  g_inf_div_by_zero = true;
+  config().exec.codegen.inf_div_by_zero = true;
   for (auto dt : {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU}) {
     SKIP_NO_GPU();
     c("SELECT f / 0. FROM test;", "SELECT 2e308 FROM test;", dt);
@@ -8386,13 +8404,13 @@ TEST_F(Select, ArrayUnnest) {
     }
 
     // unnest groupby, force estimator run
-    const auto big_group_threshold = g_big_group_threshold;
+    const auto big_group_threshold = config().exec.group_by.big_group_threshold;
     ScopeGuard reset_big_group_threshold = [&big_group_threshold] {
       // this sets the "has estimation" parameter to false for baseline hash groupby of
       // small tables, forcing the estimator to run
-      g_big_group_threshold = big_group_threshold;
+      config().exec.group_by.big_group_threshold = big_group_threshold;
     };
-    g_big_group_threshold = 1;
+    config().exec.group_by.big_group_threshold = 1;
 
     EXPECT_EQ(
         v<int64_t>(run_simple_agg(
@@ -8672,12 +8690,14 @@ TEST_F(Select, GpuSort) {
 }
 
 TEST_F(Select, SpeculativeTopNSort) {
-  ScopeGuard reset = [orig = g_parallel_top_min] { g_parallel_top_min = orig; };
-  size_t test_values[]{size_t(0), g_parallel_top_min};
+  ScopeGuard reset = [orig = config().exec.parallel_top_min] {
+    config().exec.parallel_top_min = orig;
+  };
+  size_t test_values[]{size_t(0), config().exec.parallel_top_min};
   for (auto dt : {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU}) {
     SKIP_NO_GPU();
     for (auto parallel_top_min : test_values) {
-      g_parallel_top_min = parallel_top_min;
+      config().exec.parallel_top_min = parallel_top_min;
       c("SELECT x, COUNT(*) AS val FROM gpu_sort_test GROUP BY x ORDER BY val DESC LIMIT "
         "2;",
         dt);
@@ -8700,26 +8720,27 @@ TEST_F(Select, SpeculativeTopNSort) {
 }
 
 TEST_F(Select, TopNSortWithWatchdogOn) {
-  ScopeGuard reset = [top_min = g_parallel_top_min,
-                      top_max = g_parallel_top_max,
-                      watchdog = g_enable_watchdog] {
-    g_parallel_top_min = top_min;
-    g_parallel_top_max = top_max;
-    g_enable_watchdog = watchdog;
+  ScopeGuard reset = [top_min = config().exec.parallel_top_min,
+                      top_max = config().exec.watchdog.parallel_top_max,
+                      watchdog = config().exec.watchdog.enable] {
+    config().exec.parallel_top_min = top_min;
+    config().exec.watchdog.parallel_top_max = top_max;
+    config().exec.watchdog.enable = watchdog;
   };
-  g_parallel_top_min = 0;
-  g_parallel_top_max = 10;
+  config().exec.parallel_top_min = 0;
+  config().exec.watchdog.parallel_top_max = 10;
   // Let's assume we have top-K query as SELECT ... ORDER BY ... LIMIT K
   // Currently, when columnar output is on (either by default or manually turned on)
   // QMD decides to use resultset's cardinality instead of K for its entry count
   // Then if we enable watchdog, we get the watchdog exception when sorting
-  // if QMD's entry_count > g_parallel_top_max (also > g_parallel_top_min)
+  // if QMD's entry_count > config().exec.watchdog.parallel_top_max (also >
+  // config().exec.parallel_top_min)
   // ("Sorting the result would be too slow")
   bool test_values[]{true, false};
   for (auto dt : {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU}) {
     SKIP_NO_GPU();
     for (auto watchdog : test_values) {
-      g_enable_watchdog = watchdog;
+      config().exec.watchdog.enable = watchdog;
       EXPECT_NO_THROW(
           run_multiple_agg("SELECT x FROM gpu_sort_test ORDER BY x DESC", dt));
       EXPECT_NO_THROW(run_multiple_agg(
@@ -8735,11 +8756,13 @@ TEST_F(Select, TopNSortWithWatchdogOn) {
 }
 
 TEST_F(Select, GroupByPerfectHash) {
-  const auto default_bigint_flag = g_bigint_count;
-  ScopeGuard reset = [default_bigint_flag] { g_bigint_count = default_bigint_flag; };
+  const auto default_bigint_flag = config().exec.group_by.bigint_count;
+  ScopeGuard reset = [default_bigint_flag] {
+    config().exec.group_by.bigint_count = default_bigint_flag;
+  };
 
   auto run_test = [](const bool bigint_count_flag) {
-    g_bigint_count = bigint_count_flag;
+    config().exec.group_by.bigint_count = bigint_count_flag;
     for (auto dt : {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU}) {
       SKIP_NO_GPU();
       // single-column perfect hash:
@@ -9508,13 +9531,13 @@ TEST_F(Select, Joins_DifferentIntegerTypes) {
 }
 
 TEST_F(Select, Joins_FilterPushDown) {
-  auto default_flag = g_enable_filter_push_down;
-  auto default_lower_frac = g_filter_push_down_low_frac;
+  auto default_flag = config().opts.filter_pushdown.enable;
+  auto default_lower_frac = config().opts.filter_pushdown.low_frac;
   for (auto dt : {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU}) {
     SKIP_NO_GPU();
     for (auto fpd : {std::make_pair(true, 1.0), std::make_pair(false, 0.0)}) {
-      g_enable_filter_push_down = fpd.first;
-      g_filter_push_down_low_frac = fpd.second;
+      config().opts.filter_pushdown.enable = fpd.first;
+      config().opts.filter_pushdown.low_frac = fpd.second;
       c("SELECT COUNT(*) FROM coalesce_cols_test_2 AS R, coalesce_cols_test_0 AS S "
         "WHERE R.y = S.y AND R.x > 2 AND (S.x > 1 OR S.y < 18);",
         dt);
@@ -9565,8 +9588,8 @@ TEST_F(Select, Joins_FilterPushDown) {
     }
   }
   // reloading default values
-  g_enable_filter_push_down = default_flag;
-  g_filter_push_down_low_frac = default_lower_frac;
+  config().opts.filter_pushdown.enable = default_flag;
+  config().opts.filter_pushdown.low_frac = default_lower_frac;
 }
 
 TEST_F(Select, Joins_InnerJoin_TwoTables) {
@@ -9623,9 +9646,11 @@ TEST_F(Select, Joins_InnerJoin_TwoTables) {
       "order by test.z;",
       dt);
 
-    const auto watchdog_state = g_enable_watchdog;
-    ScopeGuard reset = [watchdog_state] { g_enable_watchdog = watchdog_state; };
-    g_enable_watchdog = false;
+    const auto watchdog_state = config().exec.watchdog.enable;
+    ScopeGuard reset = [watchdog_state] {
+      config().exec.watchdog.enable = watchdog_state;
+    };
+    config().exec.watchdog.enable = false;
     c(R"(SELECT str FROM test JOIN (SELECT 'foo' AS val, 12345 AS cnt) subq ON test.str = subq.val;)",
       dt);
   }
@@ -9743,9 +9768,9 @@ TEST_F(Select, Joins_InnerJoin_Filters) {
 }
 
 TEST_F(Select, Joins_LeftJoinFiltered) {
-  const bool left_join_hoisting_state = g_enable_left_join_filter_hoisting;
+  const bool left_join_hoisting_state = config().opts.enable_left_join_filter_hoisting;
   ScopeGuard reset = [left_join_hoisting_state] {
-    g_enable_left_join_filter_hoisting = left_join_hoisting_state;
+    config().opts.enable_left_join_filter_hoisting = left_join_hoisting_state;
   };
 
   auto check_explain_result = [](const std::string& query,
@@ -9775,7 +9800,7 @@ TEST_F(Select, Joins_LeftJoinFiltered) {
   };
 
   for (bool enable_filter_hoisting : {false, true}) {
-    g_enable_left_join_filter_hoisting = enable_filter_hoisting;
+    config().opts.enable_left_join_filter_hoisting = enable_filter_hoisting;
 
     for (auto dt : {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU}) {
       SKIP_NO_GPU();
@@ -10805,7 +10830,7 @@ TEST_F(Select, Joins_OneOuterExpression) {
 }
 
 TEST_F(Select, Joins_Subqueries) {
-  if (g_enable_columnar_output) {
+  if (config().rs.enable_columnar_output) {
     // TODO(adb): fixup these tests under columnar
     return;
   }
@@ -10825,10 +10850,10 @@ TEST_F(Select, Joins_Subqueries) {
     ASSERT_EQ(1, v<int64_t>(crt_row[1]));
 
     // Subquery equijoin requiring string translation
-    const auto table_reordering_state = g_from_table_reordering;
-    g_from_table_reordering = false;  // disable from table reordering
+    const auto table_reordering_state = config().opts.from_table_reordering;
+    config().opts.from_table_reordering = false;  // disable from table reordering
     ScopeGuard reset_from_table_reordering_state = [&table_reordering_state] {
-      g_from_table_reordering = table_reordering_state;
+      config().opts.from_table_reordering = table_reordering_state;
     };
 
     c("SELECT str1, n FROM (SELECT str str1, COUNT(*) n FROM test GROUP BY str HAVING "
@@ -10889,10 +10914,10 @@ class JoinTest : public ExecuteTestBase, public ::testing::Test {
 };
 
 TEST_F(JoinTest, EmptyJoinTables) {
-  const auto table_reordering_state = g_from_table_reordering;
-  g_from_table_reordering = false;  // disable from table reordering
+  const auto table_reordering_state = config().opts.from_table_reordering;
+  config().opts.from_table_reordering = false;  // disable from table reordering
   ScopeGuard reset_from_table_reordering_state = [&table_reordering_state] {
-    g_from_table_reordering = table_reordering_state;
+    config().opts.from_table_reordering = table_reordering_state;
   };
 
   for (auto dt : {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU}) {
@@ -10977,9 +11002,11 @@ TEST_F(Select, Joins_Decimal) {
       "WHERE t1.y = t2.y ORDER BY t1.y, t1.x;",
       dt);
     // disable loop joins, expect throw
-    const auto trivial_join_loop_state = g_trivial_loop_join_threshold;
-    ScopeGuard reset = [&] { g_trivial_loop_join_threshold = trivial_join_loop_state; };
-    g_trivial_loop_join_threshold = 1;
+    const auto trivial_join_loop_state = config().exec.join.trivial_loop_join_threshold;
+    ScopeGuard reset = [&] {
+      config().exec.join.trivial_loop_join_threshold = trivial_join_loop_state;
+    };
+    config().exec.join.trivial_loop_join_threshold = 1;
 
     EXPECT_ANY_THROW(
         run_multiple_agg("SELECT COUNT(*) FROM hash_join_decimal_test as t1, "
@@ -11298,10 +11325,10 @@ TEST_F(Select, ArrowDictionaries) {
 }
 
 TEST_F(Select, WatchdogTest) {
-  const auto watchdog_state = g_enable_watchdog;
-  g_enable_watchdog = true;
+  const auto watchdog_state = config().exec.watchdog.enable;
+  config().exec.watchdog.enable = true;
   ScopeGuard reset_Watchdog_state = [&watchdog_state] {
-    g_enable_watchdog = watchdog_state;
+    config().exec.watchdog.enable = watchdog_state;
   };
   for (auto dt : {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU}) {
     SKIP_NO_GPU();
@@ -11313,18 +11340,19 @@ TEST_F(Select, WatchdogTest) {
 }
 
 TEST_F(Select, PuntToCPU) {
-  const auto cpu_retry_state = g_allow_cpu_retry;
-  const auto cpu_step_retry_state = g_allow_query_step_cpu_retry;
-  const auto watchdog_state = g_enable_watchdog;
-  g_allow_cpu_retry = false;
-  g_allow_query_step_cpu_retry = false;
-  g_enable_watchdog = true;
+  const auto cpu_retry_state = config().exec.heterogeneous.allow_cpu_retry;
+  const auto cpu_step_retry_state =
+      config().exec.heterogeneous.allow_query_step_cpu_retry;
+  const auto watchdog_state = config().exec.watchdog.enable;
+  config().exec.heterogeneous.allow_cpu_retry = false;
+  config().exec.heterogeneous.allow_query_step_cpu_retry = false;
+  config().exec.watchdog.enable = true;
   ScopeGuard reset_global_flag_state =
       [&cpu_retry_state, &cpu_step_retry_state, &watchdog_state] {
-        g_allow_cpu_retry = cpu_retry_state;
-        g_allow_query_step_cpu_retry = cpu_step_retry_state;
-        g_enable_watchdog = watchdog_state;
-        g_gpu_mem_limit_percent = 0.9;  // Reset to 90%
+        config().exec.heterogeneous.allow_cpu_retry = cpu_retry_state;
+        config().exec.heterogeneous.allow_query_step_cpu_retry = cpu_step_retry_state;
+        config().exec.watchdog.enable = watchdog_state;
+        config().mem.gpu.input_mem_limit_percent = 0.9;  // Reset to 90%
       };
 
   const auto dt = ExecutorDeviceType::GPU;
@@ -11332,31 +11360,32 @@ TEST_F(Select, PuntToCPU) {
     return;
   }
 
-  g_gpu_mem_limit_percent = 1e-10;
+  config().mem.gpu.input_mem_limit_percent = 1e-10;
   EXPECT_THROW(run_multiple_agg("SELECT x, COUNT(*) FROM test GROUP BY x;", dt),
                std::runtime_error);
   EXPECT_THROW(run_multiple_agg("SELECT str, COUNT(*) FROM test GROUP BY str;", dt),
                std::runtime_error);
 
-  g_allow_cpu_retry = true;
+  config().exec.heterogeneous.allow_cpu_retry = true;
   EXPECT_NO_THROW(run_multiple_agg("SELECT x, COUNT(*) FROM test GROUP BY x;", dt));
   EXPECT_NO_THROW(run_multiple_agg(
       "SELECT COUNT(*) FROM test WHERE x IN (SELECT y FROM test WHERE y > 3);", dt));
 }
 
 TEST_F(Select, PuntQueryStepToCPU) {
-  const auto cpu_retry_state = g_allow_cpu_retry;
-  const auto cpu_step_retry_state = g_allow_query_step_cpu_retry;
-  const auto watchdog_state = g_enable_watchdog;
-  g_allow_cpu_retry = false;
-  g_allow_query_step_cpu_retry = false;
-  g_enable_watchdog = true;
+  const auto cpu_retry_state = config().exec.heterogeneous.allow_cpu_retry;
+  const auto cpu_step_retry_state =
+      config().exec.heterogeneous.allow_query_step_cpu_retry;
+  const auto watchdog_state = config().exec.watchdog.enable;
+  config().exec.heterogeneous.allow_cpu_retry = false;
+  config().exec.heterogeneous.allow_query_step_cpu_retry = false;
+  config().exec.watchdog.enable = true;
   ScopeGuard reset_global_flag_state =
       [&cpu_retry_state, &cpu_step_retry_state, &watchdog_state] {
-        g_allow_cpu_retry = cpu_retry_state;
-        g_allow_query_step_cpu_retry = cpu_step_retry_state;
-        g_enable_watchdog = watchdog_state;
-        g_gpu_mem_limit_percent = 0.9;  // Reset to 90%
+        config().exec.heterogeneous.allow_cpu_retry = cpu_retry_state;
+        config().exec.heterogeneous.allow_query_step_cpu_retry = cpu_step_retry_state;
+        config().exec.watchdog.enable = watchdog_state;
+        config().mem.gpu.input_mem_limit_percent = 0.9;  // Reset to 90%
       };
 
   const auto dt = ExecutorDeviceType::GPU;
@@ -11368,41 +11397,42 @@ TEST_F(Select, PuntQueryStepToCPU) {
   EXPECT_NO_THROW(run_multiple_agg("SELECT x, COUNT(*) FROM test GROUP BY x;", dt));
 
   // Query is multi-step and second step can only run on CPU, will fail without
-  // g_allow_cpu_retry Note: If and when we implement APPROX_MEDIAN for GPU, this will
-  // fail and need adjustment
+  // config().exec.heterogeneous.allow_cpu_retry Note: If and when we implement
+  // APPROX_MEDIAN for GPU, this will fail and need adjustment
   EXPECT_THROW(run_multiple_agg("SELECT x, APPROX_MEDIAN(n) AS n_median FROM (SELECT x, "
                                 "y, COUNT(*) AS n FROM test GROUP BY x, y) GROUP BY x;",
                                 dt),
                std::runtime_error);
 
-  g_allow_cpu_retry = false;
-  g_allow_query_step_cpu_retry = true;
+  config().exec.heterogeneous.allow_cpu_retry = false;
+  config().exec.heterogeneous.allow_query_step_cpu_retry = true;
 
   EXPECT_NO_THROW(run_multiple_agg("SELECT x, COUNT(*) FROM test GROUP BY x;", dt));
-  // Even without g_allow_cpu_retry = true, this should run with
-  // g_allow_query_step_cpu_retry = true, as second step can drop to CPU without
-  // triggering global punt to CPU
+  // Even without config().exec.heterogeneous.allow_cpu_retry = true, this should run with
+  // config().exec.heterogeneous.allow_query_step_cpu_retry = true, as second step can
+  // drop to CPU without triggering global punt to CPU
   EXPECT_NO_THROW(
       run_multiple_agg("SELECT x, APPROX_MEDIAN(n) AS n_median FROM (SELECT x, y, "
                        "COUNT(*) AS n FROM test GROUP BY x, y) GROUP BY x;",
                        dt));
 
-  g_allow_cpu_retry = false;
-  g_allow_query_step_cpu_retry = false;
-  g_gpu_mem_limit_percent = 1e-10;
+  config().exec.heterogeneous.allow_cpu_retry = false;
+  config().exec.heterogeneous.allow_query_step_cpu_retry = false;
+  config().mem.gpu.input_mem_limit_percent = 1e-10;
 
   // Out of memory errors caught pre-allocation should (currently) trigger a
-  // QueryMustRunOnCPU exception and will be caught with either g_allow_cpu_retry or
-  // g_allow_query_step_cpu_retry
+  // QueryMustRunOnCPU exception and will be caught with either
+  // config().exec.heterogeneous.allow_cpu_retry or
+  // config().exec.heterogeneous.allow_query_step_cpu_retry
 
   EXPECT_THROW(run_multiple_agg("SELECT x, AVG(n) AS n_avg FROM (SELECT x, "
                                 "y, COUNT(*) AS n FROM test GROUP BY x, y) GROUP BY x;",
                                 dt),
                std::runtime_error);
 
-  g_allow_cpu_retry = false;
-  g_allow_query_step_cpu_retry = true;
-  g_gpu_mem_limit_percent = 1e-10;
+  config().exec.heterogeneous.allow_cpu_retry = false;
+  config().exec.heterogeneous.allow_query_step_cpu_retry = true;
+  config().mem.gpu.input_mem_limit_percent = 1e-10;
 
   EXPECT_NO_THROW(
       run_multiple_agg("SELECT x, AVG(n) AS n_avg FROM (SELECT x, y, "
@@ -17168,8 +17198,6 @@ TEST_F(Select, GroupEmptyBlank) {
 
 // Uses tables from import_union_all_tests().
 TEST_F(Select, UnionAll) {
-  bool enable_union = true;
-  std::swap(g_enable_union, enable_union);
   for (auto dt : {ExecutorDeviceType::CPU /*, ExecutorDeviceType::GPU*/}) {
     SKIP_NO_GPU();
     c("SELECT a0, a1, a2, a3 FROM union_all_a"
@@ -17379,7 +17407,6 @@ TEST_F(Select, UnionAll) {
                                   dt),
                  std::runtime_error);
   }
-  g_enable_union = enable_union;
 }
 
 TEST_F(Select, VariableLengthAggs) {
@@ -17426,8 +17453,8 @@ TEST_F(Select, VariableLengthAggs) {
 }
 
 TEST_F(Select, Interop) {
-  g_enable_interop = true;
-  ScopeGuard interop_guard = [] { g_enable_interop = false; };
+  config().exec.enable_interop = true;
+  ScopeGuard interop_guard = [] { config().exec.enable_interop = false; };
   for (auto dt : {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU}) {
     SKIP_NO_GPU();
     c("SELECT 'dict_' || str c1, 'fake_' || substring(real_str, 6) c2, x + 56 c3, f c4, "
@@ -17463,7 +17490,7 @@ TEST_F(Select, Interop) {
       "SELECT ('fake_' || SUBSTR(real_str, 6)) LIKE '%_ba%' b from test ORDER BY b;",
       dt);
   }
-  g_enable_interop = false;
+  config().exec.enable_interop = false;
 }
 
 // Test https://github.com/omnisci/omniscidb/issues/463
@@ -17855,6 +17882,8 @@ TEST_F(ManyRowsTest, Projection) {
 }
 
 int main(int argc, char** argv) {
+  auto config = std::make_shared<Config>();
+
   g_is_test_env = true;
 
   std::cout << "Starting ExecuteTest" << std::endl;
@@ -17870,35 +17899,45 @@ int main(int argc, char** argv) {
 
   desc.add_options()("disable-literal-hoisting", "Disable literal hoisting");
   desc.add_options()("from-table-reordering",
-                     po::value<bool>(&g_from_table_reordering)
-                         ->default_value(g_from_table_reordering)
+                     po::value<bool>(&config->opts.from_table_reordering)
+                         ->default_value(config->opts.from_table_reordering)
                          ->implicit_value(true),
                      "Enable automatic table reordering in FROM clause");
   desc.add_options()("bigint-count",
-                     po::value<bool>(&g_bigint_count)
-                         ->default_value(g_bigint_count)
+                     po::value<bool>(&config->exec.group_by.bigint_count)
+                         ->default_value(config->exec.group_by.bigint_count)
                          ->implicit_value(false),
                      "Use 64-bit count");
   desc.add_options()("disable-shared-mem-group-by",
-                     po::value<bool>(&g_enable_smem_group_by)
-                         ->default_value(g_enable_smem_group_by)
+                     po::value<bool>(&config->exec.group_by.enable_gpu_smem_group_by)
+                         ->default_value(config->exec.group_by.enable_gpu_smem_group_by)
                          ->implicit_value(false),
                      "Enable/disable using GPU shared memory for GROUP BY.");
   desc.add_options()("enable-columnar-output",
-                     po::value<bool>(&g_enable_columnar_output)
-                         ->default_value(g_enable_columnar_output)
+                     po::value<bool>(&config->rs.enable_columnar_output)
+                         ->default_value(config->rs.enable_columnar_output)
                          ->implicit_value(true),
                      "Enable/disable using columnar output format.");
   desc.add_options()("enable-bump-allocator",
-                     po::value<bool>(&g_enable_bump_allocator)
-                         ->default_value(g_enable_bump_allocator)
+                     po::value<bool>(&config->mem.gpu.enable_bump_allocator)
+                         ->default_value(config->mem.gpu.enable_bump_allocator)
                          ->implicit_value(true),
                      "Enable the bump allocator for projection queries on GPU.");
-  desc.add_options()("enable-heterogeneous",
-                     po::value<bool>(&g_enable_heterogeneous_execution)
-                         ->default_value(g_enable_heterogeneous_execution)
-                         ->implicit_value(true),
-                     "Allow heterogeneous execution.");
+  desc.add_options()(
+      "enable-heterogeneous",
+      po::value<bool>(&config->exec.heterogeneous.enable_heterogeneous_execution)
+          ->default_value(config->exec.heterogeneous.enable_heterogeneous_execution)
+          ->implicit_value(true),
+      "Allow heterogeneous execution.");
+  desc.add_options()(
+      "force-heterogeneous-distribution",
+      po::value<bool>(&config->exec.heterogeneous.forced_heterogeneous_distribution)
+          ->default_value(config->exec.heterogeneous.forced_heterogeneous_distribution)
+          ->implicit_value(true));
+  desc.add_options()(
+      "cpu-prop", po::value<unsigned>(&config->exec.heterogeneous.forced_cpu_proportion));
+  desc.add_options()(
+      "gpu-prop", po::value<unsigned>(&config->exec.heterogeneous.forced_gpu_proportion));
   desc.add_options()("dump-ir",
                      po::value<bool>()->default_value(false)->implicit_value(true),
                      "Dump IR and PTX for all executed queries to file."
@@ -17906,11 +17945,20 @@ int main(int argc, char** argv) {
   desc.add_options()("use-disk-cache",
                      "Use the disk cache for all tables with minimum size settings.");
   desc.add_options()("use-groupby-buffer-desc",
-                     po::value<bool>(&g_use_groupby_buffer_desc)
-                         ->default_value(g_use_groupby_buffer_desc)
+                     po::value<bool>(&config->exec.group_by.use_groupby_buffer_desc)
+                         ->default_value(config->exec.group_by.use_groupby_buffer_desc)
                          ->implicit_value(true),
                      "Use GroupBy Buffer Descriptor for hash tables.");
-
+  desc.add_options()("build-rel-alg-cache",
+                     po::value<std::string>(&config->debug.build_ra_cache)
+                         ->default_value(config->debug.build_ra_cache),
+                     "Used in tests to store all parsed SQL queries in a cache and "
+                     "write them to the specified file when program finishes.");
+  desc.add_options()("use-rel-alg-cache",
+                     po::value<std::string>(&config->debug.use_ra_cache)
+                         ->default_value(config->debug.use_ra_cache),
+                     "Used in tests to load pre-generated cache of parsed SQL "
+                     "queries from the specified file to avoid Calcite usage.");
   desc.add_options()(
       "test-help",
       "Print all ExecuteTest specific options (for gtest options use `--help`).");
@@ -17939,13 +17987,13 @@ int main(int argc, char** argv) {
   logger::init(log_options);
 
   if (vm.count("disable-literal-hoisting")) {
-    g_hoist_literals = false;
+    config->exec.codegen.hoist_literals = false;
   }
 
-  g_enable_window_functions = true;
-  g_enable_interop = false;
+  config->exec.window_func.enable = true;
+  config->exec.enable_interop = false;
 
-  init();
+  init(config);
 
   int err{0};
   try {

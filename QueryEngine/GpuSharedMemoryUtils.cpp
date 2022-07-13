@@ -21,14 +21,16 @@
 #include "RuntimeFunctions.h"
 
 GpuSharedMemCodeBuilder::GpuSharedMemCodeBuilder(
-    llvm::Module* module,
+    llvm::Module* llvm_module,
     llvm::LLVMContext& context,
     const QueryMemoryDescriptor& qmd,
     const std::vector<TargetInfo>& targets,
     const std::vector<int64_t>& init_agg_values,
-    const size_t executor_id)
+    const size_t executor_id,
+    const Config& config)
     : executor_id_(executor_id)
-    , module_(module)
+    , config_(config)
+    , module_(llvm_module)
     , context_(context)
     , reduction_func_(nullptr)
     , init_func_(nullptr)
@@ -141,7 +143,8 @@ void GpuSharedMemCodeBuilder::codegenReduction() {
       fixup_query_mem_desc,
       targets_,
       result_set::initialize_target_values_for_storage(targets_),
-      executor_id_);
+      executor_id_,
+      config_);
   auto reduction_code = rs_reduction_jit->codegen();
   CHECK(reduction_code.module);
   reduction_code.module->setDataLayout(

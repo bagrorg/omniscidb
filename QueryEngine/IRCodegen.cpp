@@ -20,11 +20,7 @@
 #include "MaxwellCodegenPatch.h"
 #include "RelAlgTranslator.h"
 
-#include "QueryEngine/JoinHashTable/RangeJoinHashTable.h"
-
 // Driver methods for the IR generation.
-
-extern bool g_enable_left_join_filter_hoisting;
 
 std::vector<llvm::Value*> CodeGenerator::codegen(const Analyzer::Expr* expr,
                                                  const bool fetch_columns,
@@ -489,7 +485,8 @@ void check_if_loop_join_is_allowed(RelAlgExecutionUnit& ra_exe_unit,
                                    const ExecutionOptions& eo,
                                    const std::vector<InputTableInfo>& query_infos,
                                    const size_t level_idx,
-                                   const std::string& fail_reason) {
+                                   const std::string& fail_reason,
+                                   unsigned trivial_loop_join_threshold) {
   if (eo.allow_loop_joins) {
     return;
   }
@@ -498,7 +495,7 @@ void check_if_loop_join_is_allowed(RelAlgExecutionUnit& ra_exe_unit,
         "Hash join failed, reason(s): " + fail_reason +
         " | Cannot fall back to loop join for intermediate join quals");
   }
-  if (!is_trivial_loop_join(query_infos, ra_exe_unit)) {
+  if (!is_trivial_loop_join(query_infos, ra_exe_unit, trivial_loop_join_threshold)) {
     throw std::runtime_error(
         "Hash join failed, reason(s): " + fail_reason +
         " | Cannot fall back to loop join for non-trivial inner table size");
@@ -606,38 +603,6 @@ std::vector<JoinLoop> Executor::buildJoinLoops(
                 ? std::function<void(llvm::Value*)>(found_outer_join_matches_cb)
                 : nullptr,
             /*hoisted_filters=*/hoisted_filters_cb);
-      } else if (auto range_join_table =
-                     dynamic_cast<RangeJoinHashTable*>(current_level_hash_table.get())) {
-        join_loops.emplace_back(
-            /* kind= */ JoinLoopKind::MultiSet,
-            /* type= */ current_level_join_conditions.type,
-            /* iteration_domain_codegen= */
-            [this,
-             range_join_table,
-             current_hash_table_idx,
-             level_idx,
-             current_level_hash_table,
-             &co](const std::vector<llvm::Value*>& prev_iters) {
-              addJoinLoopIterator(prev_iters, level_idx);
-              JoinLoopDomain domain{{0}};
-              CHECK(!prev_iters.empty());
-              const auto matching_set = range_join_table->codegenMatchingSetWithOffset(
-                  co, current_hash_table_idx, prev_iters.back());
-              domain.values_buffer = matching_set.elements;
-              domain.element_count = matching_set.count;
-              return domain;
-            },
-            /* outer_condition_match= */
-            current_level_join_conditions.type == JoinType::LEFT
-                ? std::function<llvm::Value*(const std::vector<llvm::Value*>&)>(
-                      outer_join_condition_remaining_quals_cb)
-                : nullptr,
-            /* found_outer_matches= */
-            current_level_join_conditions.type == JoinType::LEFT
-                ? std::function<void(llvm::Value*)>(found_outer_join_matches_cb)
-                : nullptr,
-            /* hoisted_filters= */ nullptr  // <<! TODO
-        );
       } else {
         join_loops.emplace_back(
             /*kind=*/JoinLoopKind::Set,
@@ -668,8 +633,12 @@ std::vector<JoinLoop> Executor::buildJoinLoops(
       const auto fail_reasons_str = current_level_join_conditions.quals.empty()
                                         ? "No equijoin expression found"
                                         : boost::algorithm::join(fail_reasons, " | ");
-      check_if_loop_join_is_allowed(
-          ra_exe_unit, eo, query_infos, level_idx, fail_reasons_str);
+      check_if_loop_join_is_allowed(ra_exe_unit,
+                                    eo,
+                                    query_infos,
+                                    level_idx,
+                                    fail_reasons_str,
+                                    config_->exec.join.trivial_loop_join_threshold);
       // Callback provided to the `JoinLoop` framework to evaluate the (outer) join
       // condition.
       VLOG(1) << "Unable to build hash table, falling back to loop join: "
@@ -768,7 +737,7 @@ JoinLoop::HoistedFiltersCallback Executor::buildHoistLeftHandSideFiltersCb(
     const size_t level_idx,
     const int inner_table_id,
     const CompilationOptions& co) {
-  if (!g_enable_left_join_filter_hoisting) {
+  if (!config_->opts.enable_left_join_filter_hoisting) {
     return nullptr;
   }
 

@@ -32,6 +32,17 @@
 #endif  // HAVE_CUDA
 
 #include "BufferProvider/BufferProvider.h"
+#include "Shared/Config.h"
+
+namespace Data_Namespace {
+class DataMgr;
+}
+
+void copy_to_nvidia_gpu(Data_Namespace::DataMgr* data_mgr,
+                        CUdeviceptr dst,
+                        const void* src,
+                        const size_t num_bytes,
+                        const int device_id);
 
 struct GpuGroupByBuffers {
   CUdeviceptr ptrs;  // ptrs for individual outputs
@@ -46,6 +57,7 @@ class Allocator;
 
 GpuGroupByBuffers create_dev_group_by_buffers(
     DeviceAllocator* device_allocator,
+    const Config& config,
     const std::vector<int64_t*>& group_by_buffers,
     const QueryMemoryDescriptor&,
     const unsigned block_size_x,

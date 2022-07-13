@@ -34,7 +34,6 @@
 #include "QueryEngine/RexVisitor.h"
 #include "QueryEngine/WindowContext.h"
 #include "SessionInfo.h"
-#include "Shared/Globals.h"
 #include "Shared/TypedDataAccessors.h"
 #include "Shared/measure.h"
 #include "Shared/misc.h"
@@ -46,24 +45,11 @@
 #include <functional>
 #include <numeric>
 
-bool g_skip_intermediate_count{true};
-bool g_enable_interop{false};
-bool g_enable_union{true};  // DEPRECATED
 size_t g_estimator_failure_max_groupby_size{256000000};
 bool g_columnar_large_projections{true};
 size_t g_columnar_large_projections_threshold{1000000};
 
-extern bool g_enable_bump_allocator;
-extern bool g_enable_watchdog;
-extern size_t g_default_max_groups_buffer_entry_guess;
-extern bool g_from_table_reordering;
-extern bool g_allow_cpu_retry;
-extern size_t g_big_group_threshold;
-extern bool g_enable_window_functions;
 extern bool g_enable_table_functions;
-extern bool g_enable_multifrag_rs;
-extern bool g_allow_query_step_cpu_retry;
-extern bool g_enable_dynamic_watchdog;
 
 namespace {
 
@@ -121,26 +107,24 @@ class RelLeftDeepTreeIdsCollector : public RelAlgVisitor<std::vector<unsigned>> 
 }  // namespace
 
 RelAlgExecutor::RelAlgExecutor(Executor* executor,
-                               int db_id,
                                SchemaProviderPtr schema_provider,
                                DataProvider* data_provider)
     : executor_(executor)
-    , db_id_(db_id)
     , schema_provider_(schema_provider)
     , data_provider_(data_provider)
+    , config_(executor_->getConfig())
     , now_(0)
     , queue_time_ms_(0) {}
 
 RelAlgExecutor::RelAlgExecutor(Executor* executor,
-                               int db_id,
                                SchemaProviderPtr schema_provider,
                                DataProvider* data_provider,
                                std::unique_ptr<RelAlgDag> query_dag)
     : executor_(executor)
-    , db_id_(db_id)
     , query_dag_(std::move(query_dag))
     , schema_provider_(std::make_shared<RelAlgSchemaProvider>(query_dag_->getRootNode()))
     , data_provider_(data_provider)
+    , config_(executor_->getConfig())
     , now_(0)
     , queue_time_ms_(0) {}
 
@@ -163,7 +147,6 @@ size_t RelAlgExecutor::getOuterFragmentCount(const CompilationOptions& co,
   ScopeGuard row_set_holder = [this] { cleanupPostExecution(); };
   const auto col_descs = get_physical_inputs(&ra);
   const auto phys_table_ids = get_physical_table_inputs(&ra);
-  executor_->setDatabaseId(db_id_);
   executor_->setSchemaProvider(schema_provider_);
   executor_->setupCaching(data_provider_, col_descs, phys_table_ids);
 
@@ -181,7 +164,6 @@ size_t RelAlgExecutor::getOuterFragmentCount(const CompilationOptions& co,
 
   decltype(temporary_tables_)().swap(temporary_tables_);
   decltype(target_exprs_owned_)().swap(target_exprs_owned_);
-  executor_->setDatabaseId(db_id_);
   executor_->setSchemaProvider(schema_provider_);
   executor_->temporary_tables_ = &temporary_tables_;
 
@@ -199,7 +181,8 @@ size_t RelAlgExecutor::getOuterFragmentCount(const CompilationOptions& co,
     auto work_unit =
         createProjectWorkUnit(project, {{}, SortAlgorithm::Default, 0, 0}, eo);
 
-    return get_frag_count_of_table(work_unit.exe_unit.input_descs[0].getTableId(),
+    return get_frag_count_of_table(work_unit.exe_unit.input_descs[0].getDatabaseId(),
+                                   work_unit.exe_unit.input_descs[0].getTableId(),
                                    executor_);
   }
 
@@ -212,7 +195,8 @@ size_t RelAlgExecutor::getOuterFragmentCount(const CompilationOptions& co,
     const auto work_unit =
         createCompoundWorkUnit(compound, {{}, SortAlgorithm::Default, 0, 0}, eo);
 
-    return get_frag_count_of_table(work_unit.exe_unit.input_descs[0].getTableId(),
+    return get_frag_count_of_table(work_unit.exe_unit.input_descs[0].getDatabaseId(),
+                                   work_unit.exe_unit.input_descs[0].getTableId(),
                                    executor_);
   }
 
@@ -244,7 +228,7 @@ ExecutionResult RelAlgExecutor::executeRelAlgQuery(const CompilationOptions& co,
   try {
     return run_query(co);
   } catch (const QueryMustRunOnCpu&) {
-    if (!g_allow_cpu_retry) {
+    if (!config_.exec.heterogeneous.allow_cpu_retry) {
       throw;
     }
   }
@@ -294,7 +278,7 @@ void RelAlgExecutor::prepareStreamingExecution(const CompilationOptions& co,
                                                const ExecutionOptions& eo) {
   query_dag_->resetQueryExecutionState();
   const auto& ra = query_dag_->getRootNode();
-  if (g_enable_dynamic_watchdog) {
+  if (config_.exec.watchdog.enable_dynamic) {
     executor_->resetInterrupt();
   }
   // so it should do cleanup session info after finishing its execution
@@ -319,7 +303,6 @@ void RelAlgExecutor::prepareStreamingExecution(const CompilationOptions& co,
   decltype(target_exprs_owned_)().swap(target_exprs_owned_);
   decltype(left_deep_join_info_)().swap(left_deep_join_info_);
 
-  executor_->setDatabaseId(db_id_);
   executor_->setSchemaProvider(schema_provider_);
   executor_->setupCaching(data_provider_, col_descs, phys_table_ids);
   executor_->temporary_tables_ = &temporary_tables_;
@@ -347,7 +330,7 @@ void RelAlgExecutor::prepareStreamingExecution(const CompilationOptions& co,
   auto work_unit = createWorkUnitForStreaming(body, co, eo);
 
   auto ra_exe_unit = work_unit.exe_unit;
-  ra_exe_unit.query_hint = RegisteredQueryHint::defaults();
+  ra_exe_unit.query_hint = RegisteredQueryHint::fromConfig(config_);
   auto candidate = query_dag_->getQueryHint(body);
   if (candidate) {
     ra_exe_unit.query_hint = *candidate;
@@ -413,12 +396,9 @@ ExecutionResult RelAlgExecutor::executeRelAlgQueryNoRetry(const CompilationOptio
 
   // capture the lock acquistion time
   auto clock_begin = timer_start();
-  if (g_enable_dynamic_watchdog) {
+  if (config_.exec.watchdog.enable_dynamic) {
     executor_->resetInterrupt();
   }
-
-  auto validate_or_explain_query =
-      just_explain_plan || eo.just_validate || eo.just_explain || eo.just_calcite_explain;
 
   auto acquire_execute_mutex = [](Executor * executor) -> auto {
     auto ret = executor->acquireExecuteMutex();
@@ -432,7 +412,6 @@ ExecutionResult RelAlgExecutor::executeRelAlgQueryNoRetry(const CompilationOptio
   ScopeGuard row_set_holder = [this] { cleanupPostExecution(); };
   const auto col_descs = get_physical_inputs(&ra);
   const auto phys_table_ids = get_physical_table_inputs(&ra);
-  executor_->setDatabaseId(db_id_);
   executor_->setSchemaProvider(schema_provider_);
   executor_->setupCaching(data_provider_, col_descs, phys_table_ids);
 
@@ -490,7 +469,7 @@ ExecutionResult RelAlgExecutor::executeRelAlgQueryNoRetry(const CompilationOptio
       continue;
     }
     // Execute the subquery and cache the result.
-    RelAlgExecutor ra_executor(executor_, db_id_, schema_provider_, data_provider_);
+    RelAlgExecutor ra_executor(executor_, schema_provider_, data_provider_);
     RaExecutionSequence subquery_seq(subquery_ra);
     auto result = ra_executor.executeRelAlgSeq(subquery_seq, co, eo, 0);
     subquery->setExecutionResult(std::make_shared<ExecutionResult>(result));
@@ -621,7 +600,7 @@ void RelAlgExecutor::prepareLeafExecution(
     const TableGenerations& table_generations) {
   // capture the lock acquistion time
   auto clock_begin = timer_start();
-  if (g_enable_dynamic_watchdog) {
+  if (config_.exec.watchdog.enable_dynamic) {
     executor_->resetInterrupt();
   }
   queue_time_ms_ = timer_stop(clock_begin);
@@ -644,7 +623,6 @@ ExecutionResult RelAlgExecutor::executeRelAlgSeq(const RaExecutionSequence& seq,
   }
   decltype(target_exprs_owned_)().swap(target_exprs_owned_);
   decltype(left_deep_join_info_)().swap(left_deep_join_info_);
-  executor_->setDatabaseId(db_id_);
   executor_->setSchemaProvider(schema_provider_);
   executor_->temporary_tables_ = &temporary_tables_;
 
@@ -677,14 +655,14 @@ ExecutionResult RelAlgExecutor::executeRelAlgSeq(const RaExecutionSequence& seq,
       // TODO(todd): Determine if and when we can relax this restriction
       // for distributed
       CHECK(co.device_type == ExecutorDeviceType::GPU);
-      if (!g_allow_query_step_cpu_retry) {
+      if (!config_.exec.heterogeneous.allow_query_step_cpu_retry) {
         throw;
       }
       LOG(INFO) << "Retrying current query step " << i << " on CPU";
       const auto co_cpu = CompilationOptions::makeCpuOnly(co);
       executeRelAlgStep(seq, i, co_cpu, eo, queue_time_ms);
     } catch (const NativeExecutionError&) {
-      if (!g_enable_interop) {
+      if (!config_.exec.enable_interop) {
         throw;
       }
       auto eo_extern = eo;
@@ -710,7 +688,6 @@ ExecutionResult RelAlgExecutor::executeRelAlgSubSeq(
     const ExecutionOptions& eo,
     const int64_t queue_time_ms) {
   INJECT_TIMER(executeRelAlgSubSeq);
-  executor_->setDatabaseId(db_id_);
   executor_->setSchemaProvider(schema_provider_);
   executor_->temporary_tables_ = &temporary_tables_;
   decltype(left_deep_join_info_)().swap(left_deep_join_info_);
@@ -723,7 +700,7 @@ ExecutionResult RelAlgExecutor::executeRelAlgSubSeq(
       // TODO(todd): Determine if and when we can relax this restriction
       // for distributed
       CHECK(co.device_type == ExecutorDeviceType::GPU);
-      if (!g_allow_query_step_cpu_retry) {
+      if (!config_.exec.heterogeneous.allow_query_step_cpu_retry) {
         throw;
       }
       LOG(INFO) << "Retrying current query step " << i << " on CPU";
@@ -791,7 +768,7 @@ void RelAlgExecutor::executeRelAlgStep(const RaExecutionSequence& seq,
     std::optional<size_t> prev_count;
     // Disabling the intermediate count optimization in distributed, as the previous
     // execution descriptor will likely not hold the aggregated result.
-    if (g_skip_intermediate_count && step_idx > 0) {
+    if (config_.opts.skip_intermediate_count && step_idx > 0) {
       // If the previous node produced a reliable count, skip the pre-flight count.
       RelAlgNode const* const prev_body = project->getInput(0);
       if (shared::dynamic_castable_to_any<RelCompound, RelLogicalValues>(prev_body)) {
@@ -811,7 +788,8 @@ void RelAlgExecutor::executeRelAlgStep(const RaExecutionSequence& seq,
     }
     // For intermediate results we want to keep the result fragmented
     // to have higher parallelism on next steps.
-    bool multifrag_result = g_enable_multifrag_rs && (step_idx != seq.size() - 1);
+    bool multifrag_result =
+        config_.exec.enable_multifrag_rs && (step_idx != seq.size() - 1);
     exec_desc.setResult(
         executeProject(project,
                        co,
@@ -1052,6 +1030,14 @@ get_used_inputs(const RelLogicalUnion* logical_union) {
   return std::make_pair(std::move(used_inputs), std::move(used_inputs_owned));
 }
 
+int db_id_from_ra(const RelAlgNode* ra_node) {
+  const auto scan_ra = dynamic_cast<const RelScan*>(ra_node);
+  if (scan_ra) {
+    return scan_ra->getDatabaseId();
+  }
+  return 0;
+}
+
 int table_id_from_ra(const RelAlgNode* ra_node) {
   const auto scan_ra = dynamic_cast<const RelScan*>(ra_node);
   if (scan_ra) {
@@ -1171,8 +1157,9 @@ get_input_desc_impl(const RA* ra_node,
     const auto input_node_idx =
         input_permutation.empty() ? input_idx : input_permutation[input_idx];
     auto input_ra = data_sink_node->getInput(input_node_idx);
+    const int db_id = db_id_from_ra(input_ra);
     const int table_id = table_id_from_ra(input_ra);
-    input_descs.emplace_back(table_id, input_idx);
+    input_descs.emplace_back(db_id, table_id, input_idx);
   }
   std::sort(input_descs.begin(),
             input_descs.end(),
@@ -1353,15 +1340,16 @@ std::vector<Analyzer::Expr*> translate_targets(
     const std::list<std::shared_ptr<Analyzer::Expr>>& groupby_exprs,
     const RelCompound* compound,
     const RelAlgTranslator& translator,
-    const ExecutorType executor_type) {
+    const ExecutorType executor_type,
+    bool bigint_count) {
   std::vector<Analyzer::Expr*> target_exprs;
   for (size_t i = 0; i < compound->size(); ++i) {
     const auto target_rex = compound->getTargetExpr(i);
     const auto target_rex_agg = dynamic_cast<const RexAgg*>(target_rex);
     std::shared_ptr<Analyzer::Expr> target_expr;
     if (target_rex_agg) {
-      target_expr =
-          RelAlgTranslator::translateAggregateRex(target_rex_agg, scalar_sources);
+      target_expr = RelAlgTranslator::translateAggregateRex(
+          target_rex_agg, scalar_sources, bigint_count);
     } else {
       const auto target_rex_scalar = dynamic_cast<const RexScalar*>(target_rex);
       const auto target_rex_ref = dynamic_cast<const RexRef*>(target_rex_scalar);
@@ -1398,7 +1386,8 @@ std::vector<Analyzer::Expr*> translate_targets(
     const std::vector<std::shared_ptr<Analyzer::Expr>>& scalar_sources,
     const std::list<std::shared_ptr<Analyzer::Expr>>& groupby_exprs,
     const RelAggregate* aggregate,
-    const RelAlgTranslator& translator) {
+    const RelAlgTranslator& translator,
+    bool bigint_count) {
   std::vector<Analyzer::Expr*> target_exprs;
   size_t group_key_idx = 1;
   for (const auto& groupby_expr : groupby_exprs) {
@@ -1409,8 +1398,8 @@ std::vector<Analyzer::Expr*> translate_targets(
   }
 
   for (const auto& target_rex_agg : aggregate->getAggExprs()) {
-    auto target_expr =
-        RelAlgTranslator::translateAggregateRex(target_rex_agg.get(), scalar_sources);
+    auto target_expr = RelAlgTranslator::translateAggregateRex(
+        target_rex_agg.get(), scalar_sources, bigint_count);
     CHECK(target_expr);
     target_expr = fold_expr(target_expr.get());
     target_exprs_owned.push_back(target_expr);
@@ -1580,7 +1569,6 @@ ExecutionResult RelAlgExecutor::executeTableFunction(const RelTableFunction* tab
                                                      nullptr,
                                                      executor_->getDataMgr(),
                                                      executor_->getBufferProvider(),
-                                                     executor_->getDatabaseId(),
                                                      executor_->blockSize(),
                                                      executor_->gridSize()),
                          {}};
@@ -1708,13 +1696,14 @@ std::unique_ptr<WindowFunctionContext> RelAlgExecutor::createWindowFunctionConte
     }
     CHECK(join_table_or_err.hash_table->getHashType() == HashType::OneToMany);
     context = std::make_unique<WindowFunctionContext>(window_func,
+                                                      config_,
                                                       join_table_or_err.hash_table,
                                                       elem_count,
                                                       co.device_type,
                                                       row_set_mem_owner);
   } else {
     context = std::make_unique<WindowFunctionContext>(
-        window_func, elem_count, co.device_type, row_set_mem_owner);
+        window_func, config_, elem_count, co.device_type, row_set_mem_owner);
   }
   const auto& order_keys = window_func->getOrderKeys();
   std::vector<std::shared_ptr<Chunk_NS::Chunk>> chunks_owner;
@@ -1975,7 +1964,8 @@ RelAlgExecutor::WorkUnit RelAlgExecutor::createSortInputWorkUnit(
   const size_t scan_total_limit =
       scan_limit ? get_scan_limit(source, scan_limit + offset) : 0;
   size_t max_groups_buffer_entry_guess{
-      scan_total_limit ? scan_total_limit : g_default_max_groups_buffer_entry_guess};
+      scan_total_limit ? scan_total_limit
+                       : config_.exec.group_by.default_max_groups_buffer_entry_guess};
   SortAlgorithm sort_algorithm{SortAlgorithm::SpeculativeTopN};
   const auto order_entries = get_order_entries(sort);
   SortInfo sort_info{order_entries, sort_algorithm, limit, offset};
@@ -2083,7 +2073,8 @@ RelAlgExecutionUnit decide_approx_count_distinct_implementation(
   RelAlgExecutionUnit ra_exe_unit = ra_exe_unit_in;
   for (size_t i = 0; i < ra_exe_unit.target_exprs.size(); ++i) {
     const auto target_expr = ra_exe_unit.target_exprs[i];
-    const auto agg_info = get_target_info(target_expr, g_bigint_count);
+    const auto agg_info =
+        get_target_info(target_expr, executor->getConfig().exec.group_by.bigint_count);
     if (agg_info.agg_kind != kAPPROX_COUNT_DISTINCT) {
       continue;
     }
@@ -2118,7 +2109,7 @@ RelAlgExecutionUnit decide_approx_count_distinct_implementation(
       CHECK_GE(error_rate->get_constval().intval, 1);
       approx_bitmap_sz_bits = hll_size_for_rate(error_rate->get_constval().intval);
     } else {
-      approx_bitmap_sz_bits = g_hll_precision_bits;
+      approx_bitmap_sz_bits = executor->getConfig().exec.group_by.hll_precision_bits;
     }
     CountDistinctDescriptor approx_count_distinct_desc{CountDistinctImplType::Bitmap,
                                                        arg_range.getIntMin(),
@@ -2135,7 +2126,12 @@ RelAlgExecutionUnit decide_approx_count_distinct_implementation(
     if (approx_count_distinct_desc.bitmapPaddedSizeBytes() >=
         precise_count_distinct_desc.bitmapPaddedSizeBytes()) {
       auto precise_count_distinct = makeExpr<Analyzer::AggExpr>(
-          get_agg_type(kCOUNT, arg.get()), kCOUNT, arg, true, nullptr);
+          get_agg_type(
+              kCOUNT, arg.get(), executor->getConfig().exec.group_by.bigint_count),
+          kCOUNT,
+          arg,
+          true,
+          nullptr);
       target_exprs_owned.push_back(precise_count_distinct);
       ra_exe_unit.target_exprs[i] = precise_count_distinct.get();
     }
@@ -2144,10 +2140,12 @@ RelAlgExecutionUnit decide_approx_count_distinct_implementation(
 }
 
 inline bool can_use_bump_allocator(const RelAlgExecutionUnit& ra_exe_unit,
+                                   const Config& config,
                                    const CompilationOptions& co,
                                    const ExecutionOptions& eo) {
-  return g_enable_bump_allocator && (co.device_type == ExecutorDeviceType::GPU) &&
-         !eo.output_columnar_hint && ra_exe_unit.sort_info.order_entries.empty();
+  return config.mem.gpu.enable_bump_allocator &&
+         (co.device_type == ExecutorDeviceType::GPU) && !eo.output_columnar_hint &&
+         ra_exe_unit.sort_info.order_entries.empty();
 }
 
 }  // namespace
@@ -2167,7 +2165,7 @@ ExecutionResult RelAlgExecutor::executeWorkUnit(
   auto eo = eo_in;
   ColumnCacheMap column_cache;
   if (is_window_execution_unit(work_unit.exe_unit)) {
-    if (!g_enable_window_functions) {
+    if (!config_.exec.window_func.enable) {
       throw std::runtime_error("Window functions support is disabled");
     }
     co.device_type = ExecutorDeviceType::CPU;
@@ -2189,7 +2187,7 @@ ExecutionResult RelAlgExecutor::executeWorkUnit(
       work_unit.exe_unit, table_infos, executor_, co.device_type, target_exprs_owned_);
 
   // register query hint if query_dag_ is valid
-  ra_exe_unit.query_hint = RegisteredQueryHint::defaults();
+  ra_exe_unit.query_hint = RegisteredQueryHint::fromConfig(config_);
   if (query_dag_) {
     auto candidate = query_dag_->getQueryHint(body);
     if (candidate) {
@@ -2207,7 +2205,7 @@ ExecutionResult RelAlgExecutor::executeWorkUnit(
     if (previous_count && !exe_unit_has_quals(ra_exe_unit)) {
       ra_exe_unit.scan_limit = *previous_count;
     } else {
-      if (can_use_bump_allocator(ra_exe_unit, co, eo)) {
+      if (can_use_bump_allocator(ra_exe_unit, config_, co, eo)) {
         ra_exe_unit.scan_limit = 0;
         ra_exe_unit.use_bump_allocator = true;
       } else if (eo.executor_type == ::ExecutorType::Extern) {
@@ -2237,7 +2235,6 @@ ExecutionResult RelAlgExecutor::executeWorkUnit(
                                                      nullptr,
                                                      executor_->getDataMgr(),
                                                      executor_->getBufferProvider(),
-                                                     executor_->getDatabaseId(),
                                                      executor_->blockSize(),
                                                      executor_->gridSize()),
                          {}};
@@ -2284,10 +2281,10 @@ ExecutionResult RelAlgExecutor::executeWorkUnit(
       result = execute_and_handle_errors(
           card, /*has_cardinality_estimation=*/true, /*has_ndv_estimation=*/false);
     } else {
-      result = execute_and_handle_errors(
-          max_groups_buffer_entry_guess,
-          groups_approx_upper_bound(table_infos) <= g_big_group_threshold,
-          /*has_ndv_estimation=*/false);
+      result = execute_and_handle_errors(max_groups_buffer_entry_guess,
+                                         groups_approx_upper_bound(table_infos) <=
+                                             config_.exec.group_by.big_group_threshold,
+                                         /*has_ndv_estimation=*/false);
     }
   } catch (const CardinalityEstimationRequired& e) {
     // check the cardinality cache
@@ -2319,14 +2316,14 @@ std::optional<size_t> RelAlgExecutor::getFilteredCountAll(const WorkUnit& work_u
                                                           const bool is_agg,
                                                           const CompilationOptions& co,
                                                           const ExecutionOptions& eo) {
-  const auto count =
-      makeExpr<Analyzer::AggExpr>(SQLTypeInfo(g_bigint_count ? kBIGINT : kINT, false),
-                                  kCOUNT,
-                                  nullptr,
-                                  false,
-                                  nullptr);
-  const auto count_all_exe_unit =
-      create_count_all_execution_unit(work_unit.exe_unit, count);
+  const auto count = makeExpr<Analyzer::AggExpr>(
+      SQLTypeInfo(config_.exec.group_by.bigint_count ? kBIGINT : kINT, false),
+      kCOUNT,
+      nullptr,
+      false,
+      nullptr);
+  const auto count_all_exe_unit = create_count_all_execution_unit(
+      work_unit.exe_unit, count, config_.opts.strip_join_covered_quals);
   size_t one{1};
   TemporaryTable count_all_result;
   try {
@@ -2413,7 +2410,6 @@ ExecutionResult RelAlgExecutor::handleOutOfMemoryRetry(
                                                   nullptr,
                                                   executor_->getDataMgr(),
                                                   executor_->getBufferProvider(),
-                                                  executor_->getDatabaseId(),
                                                   executor_->blockSize(),
                                                   executor_->gridSize()),
                       {}};
@@ -2499,7 +2495,7 @@ ExecutionResult RelAlgExecutor::handleOutOfMemoryRetry(
         CHECK(max_groups_buffer_entry_guess);
         // Only allow two iterations of increasingly large entry guesses up to a
         // maximum of 512MB per column per kernel
-        if (g_enable_watchdog || iteration_ctr > 1) {
+        if (config_.exec.watchdog.enable || iteration_ctr > 1) {
           throw std::runtime_error("Query ran out of output slots in the result");
         }
         max_groups_buffer_entry_guess *= 2;
@@ -2526,7 +2522,7 @@ void RelAlgExecutor::handlePersistentError(const int32_t error_code) {
     // allowed to continue on CPU because retry on CPU is explicitly allowed through
     // --allow-cpu-retry.
     LOG(INFO) << "Query ran out of GPU memory, attempting punt to CPU";
-    if (!g_allow_cpu_retry) {
+    if (!config_.exec.heterogeneous.allow_cpu_retry) {
       throw std::runtime_error(
           "Query ran out of GPU memory, unable to automatically retry on CPU");
     }
@@ -2628,7 +2624,7 @@ RelAlgExecutor::WorkUnit RelAlgExecutor::createWorkUnit(const RelAlgNode* node,
     return createFilterWorkUnit(filter, sort_info, eo.just_explain);
   }
   LOG(FATAL) << "Unhandled node type: " << node->toString();
-  return {};
+  throw std::logic_error("Unexpected node type: " + node->toString());
 }
 
 namespace {
@@ -2798,7 +2794,7 @@ RelAlgExecutor::WorkUnit RelAlgExecutor::createCompoundWorkUnit(
     left_deep_join_input_sizes = get_left_deep_join_input_sizes(left_deep_join);
     left_deep_join_quals = translateLeftDeepJoinFilter(
         left_deep_join, input_descs, input_to_nest_level, eo.just_explain);
-    if (g_from_table_reordering &&
+    if (config_.opts.from_table_reordering &&
         std::find(join_types.begin(), join_types.end(), JoinType::LEFT) ==
             join_types.end()) {
       input_permutation = do_table_reordering(input_descs,
@@ -2826,8 +2822,9 @@ RelAlgExecutor::WorkUnit RelAlgExecutor::createCompoundWorkUnit(
                                               groupby_exprs,
                                               compound,
                                               translator,
-                                              eo.executor_type);
-  auto query_hint = RegisteredQueryHint::defaults();
+                                              eo.executor_type,
+                                              config_.exec.group_by.bigint_count);
+  auto query_hint = RegisteredQueryHint::fromConfig(config_);
   if (query_dag_) {
     auto candidate = query_dag_->getQueryHint(compound);
     if (candidate) {
@@ -2874,7 +2871,7 @@ RelAlgExecutor::WorkUnit RelAlgExecutor::createCompoundWorkUnit(
   }
   return {rewritten_exe_unit,
           compound,
-          g_default_max_groups_buffer_entry_guess,
+          config_.exec.group_by.default_max_groups_buffer_entry_guess,
           std::move(query_rewriter),
           input_permutation,
           left_deep_join_input_sizes};
@@ -3106,8 +3103,12 @@ RelAlgExecutor::WorkUnit RelAlgExecutor::createAggregateWorkUnit(
   const auto scalar_sources =
       synthesize_inputs(aggregate, size_t(0), in_metainfo, input_to_nest_level);
   const auto groupby_exprs = translate_groupby_exprs(aggregate, scalar_sources);
-  const auto target_exprs = translate_targets(
-      target_exprs_owned_, scalar_sources, groupby_exprs, aggregate, translator);
+  const auto target_exprs = translate_targets(target_exprs_owned_,
+                                              scalar_sources,
+                                              groupby_exprs,
+                                              aggregate,
+                                              translator,
+                                              config_.exec.group_by.bigint_count);
   const auto targets_meta = get_targets_meta(aggregate, target_exprs);
   aggregate->setOutputMetainfo(targets_meta);
   auto dag_info = QueryPlanDagExtractor::extractQueryPlanDag(aggregate,
@@ -3117,7 +3118,7 @@ RelAlgExecutor::WorkUnit RelAlgExecutor::createAggregateWorkUnit(
                                                              temporary_tables_,
                                                              executor_,
                                                              translator);
-  auto query_hint = RegisteredQueryHint::defaults();
+  auto query_hint = RegisteredQueryHint::fromConfig(config_);
   if (query_dag_) {
     auto candidate = query_dag_->getQueryHint(aggregate);
     if (candidate) {
@@ -3141,7 +3142,7 @@ RelAlgExecutor::WorkUnit RelAlgExecutor::createAggregateWorkUnit(
                               false,
                               std::nullopt},
           aggregate,
-          g_default_max_groups_buffer_entry_guess,
+          config_.exec.group_by.default_max_groups_buffer_entry_guess,
           nullptr};
 }
 
@@ -3170,7 +3171,7 @@ RelAlgExecutor::WorkUnit RelAlgExecutor::createProjectWorkUnit(
     const auto query_infos = get_table_infos(input_descs, executor_);
     left_deep_join_quals = translateLeftDeepJoinFilter(
         left_deep_join, input_descs, input_to_nest_level, eo.just_explain);
-    if (g_from_table_reordering) {
+    if (config_.opts.from_table_reordering) {
       input_permutation = do_table_reordering(input_descs,
                                               input_col_descs,
                                               left_deep_join_quals,
@@ -3193,7 +3194,7 @@ RelAlgExecutor::WorkUnit RelAlgExecutor::createProjectWorkUnit(
   target_exprs_owned_.insert(
       target_exprs_owned_.end(), target_exprs_owned.begin(), target_exprs_owned.end());
   const auto target_exprs = get_exprs_not_owned(target_exprs_owned);
-  auto query_hint = RegisteredQueryHint::defaults();
+  auto query_hint = RegisteredQueryHint::fromConfig(config_);
   if (query_dag_) {
     auto candidate = query_dag_->getQueryHint(project);
     if (candidate) {
@@ -3239,7 +3240,7 @@ RelAlgExecutor::WorkUnit RelAlgExecutor::createProjectWorkUnit(
   }
   return {rewritten_exe_unit,
           project,
-          g_default_max_groups_buffer_entry_guess,
+          config_.exec.group_by.default_max_groups_buffer_entry_guess,
           std::move(query_rewriter),
           input_permutation,
           left_deep_join_input_sizes};
@@ -3315,7 +3316,7 @@ RelAlgExecutor::WorkUnit RelAlgExecutor::createUnionWorkUnit(
                                         nullptr,
                                         sort_info,
                                         max_num_tuples,
-                                        RegisteredQueryHint::defaults(),
+                                        RegisteredQueryHint::fromConfig(config_),
                                         EMPTY_QUERY_PLAN,
                                         {},
                                         {},
@@ -3355,7 +3356,7 @@ RelAlgExecutor::WorkUnit RelAlgExecutor::createUnionWorkUnit(
 
   return {rewritten_exe_unit,
           logical_union,
-          g_default_max_groups_buffer_entry_guess,
+          config_.exec.group_by.default_max_groups_buffer_entry_guess,
           std::move(query_rewriter)};
 }
 
@@ -3597,7 +3598,7 @@ RelAlgExecutor::WorkUnit RelAlgExecutor::createFilterWorkUnit(const RelFilter* f
                                                              temporary_tables_,
                                                              executor_,
                                                              translator);
-  auto query_hint = RegisteredQueryHint::defaults();
+  auto query_hint = RegisteredQueryHint::fromConfig(config_);
   if (query_dag_) {
     auto candidate = query_dag_->getQueryHint(filter);
     if (candidate) {
@@ -3619,7 +3620,7 @@ RelAlgExecutor::WorkUnit RelAlgExecutor::createFilterWorkUnit(const RelFilter* f
            dag_info.hash_table_plan_dag,
            dag_info.table_id_to_node_map},
           filter,
-          g_default_max_groups_buffer_entry_guess,
+          config_.exec.group_by.default_max_groups_buffer_entry_guess,
           nullptr};
 }
 

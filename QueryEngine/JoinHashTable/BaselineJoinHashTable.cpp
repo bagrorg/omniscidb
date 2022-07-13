@@ -18,7 +18,7 @@
 
 #include <future>
 
-#include "DataMgr/Allocators/CudaAllocator.h"
+#include "DataMgr/Allocators/GpuAllocator.h"
 #include "QueryEngine/CodeGenerator.h"
 #include "QueryEngine/ColumnFetcher.h"
 #include "QueryEngine/Execute.h"
@@ -31,11 +31,9 @@
 
 // let's only consider CPU hashtable recycler at this moment
 // todo (yoonmin): support GPU hashtable cache without regression
-std::unique_ptr<HashtableRecycler> BaselineJoinHashTable::hash_table_cache_ =
-    std::make_unique<HashtableRecycler>(CacheItemType::BASELINE_HT,
-                                        DataRecyclerUtil::CPU_DEVICE_IDENTIFIER);
-std::unique_ptr<HashingSchemeRecycler> BaselineJoinHashTable::hash_table_layout_cache_ =
-    std::make_unique<HashingSchemeRecycler>();
+std::unique_ptr<HashtableRecycler> BaselineJoinHashTable::hash_table_cache_;
+std::unique_ptr<HashingSchemeRecycler> BaselineJoinHashTable::hash_table_layout_cache_;
+std::once_flag BaselineJoinHashTable::init_caches_flag_;
 
 //! Make hash table from an in-flight SQL query's parse tree etc.
 std::shared_ptr<BaselineJoinHashTable> BaselineJoinHashTable::getInstance(
@@ -50,6 +48,8 @@ std::shared_ptr<BaselineJoinHashTable> BaselineJoinHashTable::getInstance(
     Executor* executor,
     const HashTableBuildDagMap& hashtable_build_dag_map,
     const TableIdToNodeMap& table_id_to_node_map) {
+  initCaches(executor->getConfigPtr());
+
   decltype(std::chrono::steady_clock::now()) ts1, ts2;
 
   if (VLOGGING(1)) {
@@ -111,6 +111,14 @@ std::shared_ptr<BaselineJoinHashTable> BaselineJoinHashTable::getInstance(
             << " ms";
   }
   return join_hash_table;
+}
+
+void BaselineJoinHashTable::initCaches(ConfigPtr config) {
+  std::call_once(init_caches_flag_, [&config]() {
+    hash_table_cache_ = std::make_unique<HashtableRecycler>(
+        config, CacheItemType::BASELINE_HT, DataRecyclerUtil::CPU_DEVICE_IDENTIFIER);
+    hash_table_layout_cache_ = std::make_unique<HashingSchemeRecycler>(config);
+  });
 }
 
 BaselineJoinHashTable::BaselineJoinHashTable(
@@ -244,11 +252,11 @@ void BaselineJoinHashTable::reifyWithLayout(const HashType layout) {
   }
 
   auto buffer_provider = executor_->getBufferProvider();
-  std::vector<std::unique_ptr<CudaAllocator>> dev_buff_owners;
+  std::vector<std::unique_ptr<GpuAllocator>> dev_buff_owners;
   if (memory_level_ == Data_Namespace::MemoryLevel::GPU_LEVEL) {
     for (int device_id = 0; device_id < device_count_; ++device_id) {
       dev_buff_owners.emplace_back(
-          std::make_unique<CudaAllocator>(buffer_provider, device_id));
+          std::make_unique<GpuAllocator>(buffer_provider, device_id));
     }
   }
   std::vector<ColumnsForDevice> columns_per_device;
@@ -378,7 +386,7 @@ std::pair<size_t, size_t> BaselineJoinHashTable::approximateTupleCount(
          &count_distinct_desc,
          buffer_provider,
          &host_hll_buffers] {
-          CudaAllocator allocator(buffer_provider, device_id);
+          GpuAllocator allocator(buffer_provider, device_id);
           auto device_hll_buffer =
               allocator.alloc(count_distinct_desc.bitmapPaddedSizeBytes());
           buffer_provider->zeroDeviceMem(
@@ -438,7 +446,6 @@ ColumnsForDevice BaselineJoinHashTable::fetchColumnsForDevice(
   std::vector<JoinColumn> join_columns;
   std::vector<std::shared_ptr<Chunk_NS::Chunk>> chunks_owner;
   std::vector<JoinColumnTypeInfo> join_column_types;
-  std::vector<JoinBucketInfo> join_bucket_info;
   std::vector<std::shared_ptr<void>> malloc_owner;
   for (const auto& inner_outer_pair : inner_outer_pairs_) {
     const auto inner_col = inner_outer_pair.first;
@@ -463,7 +470,7 @@ ColumnsForDevice BaselineJoinHashTable::fetchColumnsForDevice(
                                                       0,
                                                       get_join_column_type_kind(ti)});
   }
-  return {join_columns, join_column_types, chunks_owner, join_bucket_info, malloc_owner};
+  return {join_columns, join_column_types, chunks_owner, malloc_owner};
 }
 
 void BaselineJoinHashTable::reifyForDevice(const ColumnsForDevice& columns_for_device,
@@ -476,7 +483,6 @@ void BaselineJoinHashTable::reifyForDevice(const ColumnsForDevice& columns_for_d
   const auto effective_memory_level = getEffectiveMemoryLevel(inner_outer_pairs_);
   const auto err = initHashTableForDevice(columns_for_device.join_columns,
                                           columns_for_device.join_column_types,
-                                          columns_for_device.join_buckets,
                                           layout,
                                           effective_memory_level,
                                           entry_count,
@@ -547,7 +553,6 @@ StrProxyTranslationMapsPtrsAndOffsets decomposeStrDictTranslationMaps(
 int BaselineJoinHashTable::initHashTableForDevice(
     const std::vector<JoinColumn>& join_columns,
     const std::vector<JoinColumnTypeInfo>& join_column_types,
-    const std::vector<JoinBucketInfo>& join_bucket_info,
     const HashType layout,
     const Data_Namespace::MemoryLevel effective_memory_level,
     const size_t entry_count,
@@ -635,7 +640,6 @@ int BaselineJoinHashTable::initHashTableForDevice(
                                          composite_key_info,
                                          join_columns,
                                          join_column_types,
-                                         join_bucket_info,
                                          str_proxy_translation_map_ptrs_and_offsets,
                                          entry_count,
                                          join_columns.front().num_elems,
@@ -673,7 +677,7 @@ int BaselineJoinHashTable::initHashTableForDevice(
 #ifdef HAVE_CUDA
       BaselineJoinHashTableBuilder builder;
 
-      builder.allocateDeviceMemory(layout,
+      builder.allocateDeviceMemory(hashtable_layout,
                                    getKeyComponentWidth(),
                                    getKeyComponentCount(),
                                    entry_count,
@@ -704,7 +708,7 @@ int BaselineJoinHashTable::initHashTableForDevice(
 #ifdef HAVE_CUDA
     BaselineJoinHashTableBuilder builder;
 
-    CudaAllocator allocator(executor_->getBufferProvider(), device_id);
+    GpuAllocator allocator(executor_->getBufferProvider(), device_id);
     auto join_column_types_gpu =
         transfer_vector_of_flat_objects_to_gpu(join_column_types, allocator);
     auto join_columns_gpu =

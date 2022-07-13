@@ -24,7 +24,13 @@ static_assert(false, "LLVM Version >= 9 is required.");
 #include <llvm/Analysis/TypeBasedAliasAnalysis.h>
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
+
+#ifdef ENABLE_ORCJIT
+#include <llvm/ExecutionEngine/JITSymbol.h>
+#else
 #include <llvm/ExecutionEngine/MCJIT.h>
+#endif
+
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/GlobalValue.h>
 #include <llvm/IR/InstIterator.h>
@@ -74,8 +80,6 @@ static_assert(false, "LLVM Version >= 9 is required.");
 
 #include <boost/filesystem.hpp>
 
-float g_fraction_code_cache_to_evict = 0.2;
-
 static llvm::sys::Mutex g_ee_create_mutex;
 
 namespace {
@@ -112,9 +116,9 @@ void throw_parseIR_error(const llvm::SMDiagnostic& parse_error,
   }
 
 template <typename T = void>
-void show_defined(llvm::Module& module) {
+void show_defined(llvm::Module& llvm_module) {
   std::cout << "defines: ";
-  for (auto& f : module.getFunctionList()) {
+  for (auto& f : llvm_module.getFunctionList()) {
     if (!f.isDeclaration()) {
       std::cout << f.getName().str() << ", ";
     }
@@ -123,17 +127,17 @@ void show_defined(llvm::Module& module) {
 }
 
 template <typename T = void>
-void show_defined(llvm::Module* module) {
-  if (module == nullptr) {
+void show_defined(llvm::Module* llvm_module) {
+  if (llvm_module == nullptr) {
     std::cout << "is null" << std::endl;
   } else {
-    show_defined(*module);
+    show_defined(*llvm_module);
   }
 }
 
 template <typename T = void>
-void show_defined(std::unique_ptr<llvm::Module>& module) {
-  show_defined(module.get());
+void show_defined(std::unique_ptr<llvm::Module>& llvm_module) {
+  show_defined(llvm_module.get());
 }
 
 /*
@@ -181,11 +185,11 @@ void scan_function_calls(llvm::Function& F,
 }
 
 template <typename T = void>
-void scan_function_calls(llvm::Module& module,
+void scan_function_calls(llvm::Module& llvm_module,
                          std::unordered_set<std::string>& defined,
                          std::unordered_set<std::string>& undefined,
                          const std::unordered_set<std::string>& ignored) {
-  for (auto& F : module) {
+  for (auto& F : llvm_module) {
     if (!F.isDeclaration()) {
       scan_function_calls(F, defined, undefined, ignored);
     }
@@ -194,10 +198,10 @@ void scan_function_calls(llvm::Module& module,
 
 template <typename T = void>
 std::tuple<std::unordered_set<std::string>, std::unordered_set<std::string>>
-scan_function_calls(llvm::Module& module,
+scan_function_calls(llvm::Module& llvm_module,
                     const std::unordered_set<std::string>& ignored = {}) {
   std::unordered_set<std::string> defined, undefined;
-  scan_function_calls(module, defined, undefined, ignored);
+  scan_function_calls(llvm_module, defined, undefined, ignored);
   return std::make_tuple(defined, undefined);
 }
 
@@ -231,9 +235,9 @@ void eliminate_dead_self_recursive_funcs(
 
 // check if linking with libdevice is required
 // libdevice functions have a __nv_* prefix
-bool check_module_requires_libdevice(llvm::Module* module) {
+bool check_module_requires_libdevice(llvm::Module* llvm_module) {
   auto timer = DEBUG_TIMER(__func__);
-  for (llvm::Function& F : *module) {
+  for (llvm::Function& F : *llvm_module) {
     if (F.hasName() && F.getName().startswith("__nv_")) {
       LOG(INFO) << "Module requires linking with libdevice: " << std::string(F.getName());
       return true;
@@ -244,18 +248,18 @@ bool check_module_requires_libdevice(llvm::Module* module) {
 }
 
 // Adds the missing intrinsics declarations to the given module
-void add_intrinsics_to_module(llvm::Module* module) {
-  for (llvm::Function& F : *module) {
+void add_intrinsics_to_module(llvm::Module* llvm_module) {
+  for (llvm::Function& F : *llvm_module) {
     for (llvm::Instruction& I : instructions(F)) {
       if (llvm::IntrinsicInst* ii = llvm::dyn_cast<llvm::IntrinsicInst>(&I)) {
         if (llvm::Intrinsic::isOverloaded(ii->getIntrinsicID())) {
           llvm::Type* Tys[] = {ii->getFunctionType()->getReturnType()};
           llvm::Function& decl_fn =
-              *llvm::Intrinsic::getDeclaration(module, ii->getIntrinsicID(), Tys);
+              *llvm::Intrinsic::getDeclaration(llvm_module, ii->getIntrinsicID(), Tys);
           ii->setCalledFunction(&decl_fn);
         } else {
           // inserts the declaration into the module if not present
-          llvm::Intrinsic::getDeclaration(module, ii->getIntrinsicID());
+          llvm::Intrinsic::getDeclaration(llvm_module, ii->getIntrinsicID());
         }
       }
     }
@@ -265,7 +269,7 @@ void add_intrinsics_to_module(llvm::Module* module) {
 #endif
 
 void optimize_ir(llvm::Function* query_func,
-                 llvm::Module* module,
+                 llvm::Module* llvm_module,
                  llvm::legacy::PassManager& pass_manager,
                  const std::unordered_set<llvm::Function*>& live_funcs,
                  const bool is_gpu_smem_used,
@@ -306,21 +310,23 @@ void optimize_ir(llvm::Function* query_func,
 
   pass_manager.add(llvm::createCFGSimplificationPass());  // cleanup after everything
 
-  pass_manager.run(*module);
+  pass_manager.run(*llvm_module);
 
-  eliminate_dead_self_recursive_funcs(*module, live_funcs);
+  eliminate_dead_self_recursive_funcs(*llvm_module, live_funcs);
 }
 #endif
 
 }  // namespace
 
-ExecutionEngineWrapper::ExecutionEngineWrapper() {}
+#ifdef ENABLE_ORCJIT
+ORCJITExecutionEngineWrapper::ORCJITExecutionEngineWrapper() {}
 
-ExecutionEngineWrapper::ExecutionEngineWrapper(llvm::ExecutionEngine* execution_engine)
-    : execution_engine_(execution_engine) {}
+#else  // MCJIT
+MCJITExecutionEngineWrapper::MCJITExecutionEngineWrapper() {}
 
-ExecutionEngineWrapper::ExecutionEngineWrapper(llvm::ExecutionEngine* execution_engine,
-                                               const CompilationOptions& co)
+MCJITExecutionEngineWrapper::MCJITExecutionEngineWrapper(
+    llvm::ExecutionEngine* execution_engine,
+    const CompilationOptions& co)
     : execution_engine_(execution_engine) {
   if (execution_engine_) {
     if (co.register_intel_jit_listener) {
@@ -337,12 +343,13 @@ ExecutionEngineWrapper::ExecutionEngineWrapper(llvm::ExecutionEngine* execution_
   }
 }
 
-ExecutionEngineWrapper& ExecutionEngineWrapper::operator=(
+MCJITExecutionEngineWrapper& MCJITExecutionEngineWrapper::operator=(
     llvm::ExecutionEngine* execution_engine) {
   execution_engine_.reset(execution_engine);
   intel_jit_listener_ = nullptr;
   return *this;
 }
+#endif
 
 void verify_function_ir(const llvm::Function* func) {
   std::stringstream err_ss;
@@ -356,31 +363,11 @@ void verify_function_ir(const llvm::Function* func) {
   }
 }
 
-template <typename CC>
-std::shared_ptr<CC> Executor::getCodeFromCache(const CodeCacheKey& key,
-                                               const CodeCache<CC>& cache) {
-  auto it = cache.find(key);
-  if (it != cache.cend()) {
-    cgen_state_->module_ = it->second.second;
-    return it->second.first;
-  }
-  return {};
-}
-
-template <typename CC>
-void Executor::addCodeToCache(const CodeCacheKey& key,
-                              std::shared_ptr<CC> compilation_context,
-                              llvm::Module* module,
-                              CodeCache<CC>& cache) {
-  cache.put(key,
-            std::make_pair<std::shared_ptr<CC>, decltype(module)>(
-                std::move(compilation_context), std::move(module)));
-}
-
 namespace {
 
 std::string assemblyForCPU(ExecutionEngineWrapper& execution_engine,
-                           llvm::Module* module) {
+                           llvm::Module* llvm_module) {
+#ifndef ENABLE_ORCJIT
   llvm::legacy::PassManager pass_manager;
   auto cpu_target_machine = execution_engine->getTargetMachine();
   CHECK(cpu_target_machine);
@@ -393,9 +380,38 @@ std::string assemblyForCPU(ExecutionEngineWrapper& execution_engine,
   cpu_target_machine->addPassesToEmitFile(
       pass_manager, os, nullptr, llvm::TargetMachine::CGFT_AssemblyFile);
 #endif
-  pass_manager.run(*module);
+  pass_manager.run(*llvm_module);
   return "Assembly for the CPU:\n" + std::string(code_str.str()) + "\nEnd of assembly";
+#else   // ORCJIT
+  LOG(FATAL) << "Assembly logger not yet supported for ORCJIT.";
+  return "";
+#endif  // !ENABLE_ORCJIT
 }
+
+#ifndef ENABLE_ORCJIT
+
+ExecutionEngineWrapper create_execution_engine(llvm::Module* llvm_module,
+                                               llvm::EngineBuilder& eb,
+                                               const CompilationOptions& co) {
+  auto timer = DEBUG_TIMER(__func__);
+  // Avoids data race in
+  // llvm::sys::DynamicLibrary::getPermanentLibrary and
+  // GDBJITRegistrationListener::notifyObjectLoaded while creating a
+  // new ExecutionEngine instance. Unfortunately we have to use global
+  // mutex here.
+  std::lock_guard<llvm::sys::Mutex> lock(g_ee_create_mutex);
+  ExecutionEngineWrapper execution_engine(eb.create(), co);
+  CHECK(execution_engine.exists());
+  // Force the module data layout to match the layout for the selected target
+  llvm_module->setDataLayout(execution_engine->getDataLayout());
+
+  LOG(ASM) << assemblyForCPU(execution_engine, llvm_module);
+
+  execution_engine->finalizeObject();
+  return execution_engine;
+}
+
+#endif
 
 }  // namespace
 
@@ -415,38 +431,73 @@ ExecutionEngineWrapper CodeGenerator::generateNativeCPUCode(
   auto init_err = llvm::InitializeNativeTarget();
   CHECK(!init_err);
 
+#ifndef ENABLE_ORCJIT
   llvm::InitializeAllTargetMCs();
+#endif
   llvm::InitializeNativeTargetAsmPrinter();
   llvm::InitializeNativeTargetAsmParser();
 
   std::string err_str;
   std::unique_ptr<llvm::Module> owner(llvm_module);
+
+  llvm::TargetOptions to;
+  to.EnableFastISel = true;
+
+#ifdef ENABLE_ORCJIT
+
+  auto llvm_err_to_str = [](const llvm::Error& err) {
+    std::string msg;
+    llvm::raw_string_ostream os(msg);
+    os << err;
+    return msg;
+  };
+
+#if LLVM_VERSION_MAJOR > 12
+  auto self_epc = llvm::cantFail(llvm::orc::SelfExecutorProcessControl::Create());
+  auto execution_session =
+      std::make_unique<llvm::orc::ExecutionSession>(std::move(self_epc));
+#else
+  auto execution_session = std::make_unique<llvm::orc::ExecutionSession>();
+#endif
+
+  auto target_machine_builder_or_error = llvm::orc::JITTargetMachineBuilder::detectHost();
+  if (!target_machine_builder_or_error) {
+    LOG(FATAL) << "Failed to initialize JITTargetMachineBuilder: "
+               << llvm_err_to_str(target_machine_builder_or_error.takeError());
+  }
+  llvm::orc::JITTargetMachineBuilder target_machine_builder =
+      std::move(*target_machine_builder_or_error);
+  target_machine_builder.getOptions().EnableFastISel = true;
+
+  if (co.opt_level == ExecutorOptLevel::ReductionJIT) {
+    target_machine_builder.setCodeGenOptLevel(llvm::CodeGenOpt::None);
+  }
+
+  auto data_layout_or_err = target_machine_builder.getDefaultDataLayoutForTarget();
+  if (!data_layout_or_err) {
+    LOG(FATAL) << "Failed to initialize data layout: "
+               << llvm_err_to_str(data_layout_or_err.takeError());
+  }
+  std::unique_ptr<llvm::DataLayout> data_layout =
+      std::make_unique<llvm::DataLayout>(std::move(*data_layout_or_err));
+
+  ExecutionEngineWrapper execution_engine(std::move(execution_session),
+                                          std::move(target_machine_builder),
+                                          std::move(data_layout));
+  execution_engine.addModule(std::move(owner));
+  return execution_engine;
+#else
+
   llvm::EngineBuilder eb(std::move(owner));
   eb.setErrorStr(&err_str);
   eb.setEngineKind(llvm::EngineKind::JIT);
-  llvm::TargetOptions to;
-  to.EnableFastISel = true;
   eb.setTargetOptions(to);
   if (co.opt_level == ExecutorOptLevel::ReductionJIT) {
     eb.setOptLevel(llvm::CodeGenOpt::None);
   }
 
-  // Avoids data race in
-  // llvm::sys::DynamicLibrary::getPermanentLibrary and
-  // GDBJITRegistrationListener::notifyObjectLoaded while creating a
-  // new ExecutionEngine instance. Unfortunately we have to use global
-  // mutex here.
-  std::lock_guard<llvm::sys::Mutex> lock(g_ee_create_mutex);
-
-  ExecutionEngineWrapper execution_engine(eb.create(), co);
-  CHECK(execution_engine.get());
-  // Force the module data layout to match the layout for the selected target
-  llvm_module->setDataLayout(execution_engine->getDataLayout());
-
-  LOG(ASM) << assemblyForCPU(execution_engine, llvm_module);
-
-  execution_engine->finalizeObject();
-  return execution_engine;
+  return create_execution_engine(llvm_module, eb, co);
+#endif
 }
 
 std::shared_ptr<CompilationContext> Executor::optimizeAndCodegenCPU(
@@ -454,7 +505,6 @@ std::shared_ptr<CompilationContext> Executor::optimizeAndCodegenCPU(
     llvm::Function* multifrag_query_func,
     const std::unordered_set<llvm::Function*>& live_funcs,
     const CompilationOptions& co) {
-  auto module = multifrag_query_func->getParent();
   CodeCacheKey key{serialize_llvm_object(query_func),
                    serialize_llvm_object(cgen_state_->row_func_)};
   if (cgen_state_->filter_func_) {
@@ -463,7 +513,7 @@ std::shared_ptr<CompilationContext> Executor::optimizeAndCodegenCPU(
   for (const auto helper : cgen_state_->helper_functions_) {
     key.push_back(serialize_llvm_object(helper));
   }
-  auto cached_code = getCodeFromCache(key, cpu_code_cache_);
+  auto cached_code = cpu_code_accessor->get_value(key);
   if (cached_code) {
     return cached_code;
   }
@@ -473,40 +523,40 @@ std::shared_ptr<CompilationContext> Executor::optimizeAndCodegenCPU(
   auto cpu_compilation_context =
       std::make_shared<CpuCompilationContext>(std::move(execution_engine));
   cpu_compilation_context->setFunctionPointer(multifrag_query_func);
-  addCodeToCache(key, cpu_compilation_context, module, cpu_code_cache_);
+  cpu_code_accessor->put(key, cpu_compilation_context);
   return std::dynamic_pointer_cast<CompilationContext>(cpu_compilation_context);
 }
 
 void CodeGenerator::link_udf_module(const std::unique_ptr<llvm::Module>& udf_module,
-                                    llvm::Module& module,
+                                    llvm::Module& llvm_module,
                                     CgenState* cgen_state,
                                     llvm::Linker::Flags flags) {
   auto timer = DEBUG_TIMER(__func__);
   // throw a runtime error if the target module contains functions
   // with the same name as in module of UDF functions.
   for (auto& f : *udf_module) {
-    auto func = module.getFunction(f.getName());
+    auto func = llvm_module.getFunction(f.getName());
     if (!(func == nullptr) && !f.isDeclaration() && flags == llvm::Linker::Flags::None) {
       LOG(ERROR) << "  Attempt to overwrite " << f.getName().str() << " in "
-                 << module.getModuleIdentifier() << " from `"
+                 << llvm_module.getModuleIdentifier() << " from `"
                  << udf_module->getModuleIdentifier() << "`" << std::endl;
       throw std::runtime_error(
           "link_udf_module: *** attempt to overwrite a runtime function with a UDF "
           "function ***");
     } else {
       VLOG(1) << "  Adding " << f.getName().str() << " to "
-              << module.getModuleIdentifier() << " from `"
+              << llvm_module.getModuleIdentifier() << " from `"
               << udf_module->getModuleIdentifier() << "`" << std::endl;
     }
   }
 
   auto udf_module_copy = llvm::CloneModule(*udf_module, cgen_state->vmap_);
 
-  udf_module_copy->setDataLayout(module.getDataLayout());
-  udf_module_copy->setTargetTriple(module.getTargetTriple());
+  udf_module_copy->setDataLayout(llvm_module.getDataLayout());
+  udf_module_copy->setTargetTriple(llvm_module.getTargetTriple());
 
   // Initialize linker with module for RuntimeFunctions.bc
-  llvm::Linker ld(module);
+  llvm::Linker ld(llvm_module);
   bool link_error = false;
 
   link_error = ld.linkInModule(std::move(udf_module_copy), flags);
@@ -959,7 +1009,7 @@ namespace {
 
 #ifdef HAVE_CUDA
 std::unordered_set<llvm::Function*> findAliveRuntimeFuncs(
-    llvm::Module& module,
+    llvm::Module& llvm_module,
     const std::vector<llvm::Function*>& roots) {
   std::queue<llvm::Function*> queue;
   std::unordered_set<llvm::Function*> visited;
@@ -995,7 +1045,7 @@ std::unordered_set<llvm::Function*> findAliveRuntimeFuncs(
 
 void CodeGenerator::linkModuleWithLibdevice(
     Executor* executor,
-    llvm::Module& module,
+    llvm::Module& llvm_module,
     llvm::PassManagerBuilder& pass_manager_builder,
     const GPUTarget& gpu_target) {
 #ifdef HAVE_CUDA
@@ -1009,21 +1059,22 @@ void CodeGenerator::linkModuleWithLibdevice(
 
   // Saves functions \in module
   std::vector<llvm::Function*> roots;
-  for (llvm::Function& fn : module) {
+  for (llvm::Function& fn : llvm_module) {
     if (!fn.isDeclaration())
       roots.emplace_back(&fn);
   }
 
   // Bind libdevice to the current module
   CodeGenerator::link_udf_module(executor->get_libdevice_module(),
-                                 module,
+                                 llvm_module,
                                  gpu_target.cgen_state,
                                  llvm::Linker::Flags::OverrideFromSrc);
 
-  std::unordered_set<llvm::Function*> live_funcs = findAliveRuntimeFuncs(module, roots);
+  std::unordered_set<llvm::Function*> live_funcs =
+      findAliveRuntimeFuncs(llvm_module, roots);
 
   std::vector<llvm::Function*> funcs_to_delete;
-  for (llvm::Function& fn : module) {
+  for (llvm::Function& fn : llvm_module) {
     if (!live_funcs.count(&fn)) {
       // deleting the function were would invalidate the iterator
       funcs_to_delete.emplace_back(&fn);
@@ -1036,26 +1087,26 @@ void CodeGenerator::linkModuleWithLibdevice(
 
   // activate nvvm-reflect-ftz flag on the module
 #if LLVM_VERSION_MAJOR >= 11
-  llvm::LLVMContext& ctx = module.getContext();
-  module.setModuleFlag(llvm::Module::Override,
-                       "nvvm-reflect-ftz",
-                       llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
-                           llvm::Type::getInt32Ty(ctx), uint32_t(1))));
+  llvm::LLVMContext& ctx = llvm_module.getContext();
+  llvm_module.setModuleFlag(llvm::Module::Override,
+                            "nvvm-reflect-ftz",
+                            llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
+                                llvm::Type::getInt32Ty(ctx), uint32_t(1))));
 #else
-  module.addModuleFlag(llvm::Module::Override, "nvvm-reflect-ftz", uint32_t(1));
+  llvm_module.addModuleFlag(llvm::Module::Override, "nvvm-reflect-ftz", uint32_t(1));
 #endif
-  for (llvm::Function& fn : module) {
+  for (llvm::Function& fn : llvm_module) {
     fn.addFnAttr("nvptx-f32ftz", "true");
   }
 
   // add nvvm reflect pass replacing any NVVM conditionals with constants
   gpu_target.nvptx_target_machine->adjustPassManager(pass_manager_builder);
-  llvm::legacy::FunctionPassManager FPM(&module);
+  llvm::legacy::FunctionPassManager FPM(&llvm_module);
   pass_manager_builder.populateFunctionPassManager(FPM);
 
   // Run the NVVMReflectPass here rather than inside optimize_ir
   FPM.doInitialization();
-  for (auto& F : module) {
+  for (auto& F : llvm_module) {
     FPM.run(F);
   }
   FPM.doFinalization();
@@ -1072,7 +1123,7 @@ std::shared_ptr<GpuCompilationContext> CodeGenerator::generateNativeGPUCode(
     const GPUTarget& gpu_target) {
 #ifdef HAVE_CUDA
   auto timer = DEBUG_TIMER(__func__);
-  auto module = func->getParent();
+  auto llvm_module = func->getParent();
   /*
     `func` is one of the following generated functions:
     - `call_table_function(i8** %input_col_buffers, i64*
@@ -1085,21 +1136,21 @@ std::shared_ptr<GpuCompilationContext> CodeGenerator::generateNativeGPUCode(
     `wrapper_func` is table_func_kernel(i32*, i8**, i64*, i64**,
     i64*) that wraps `call_table_function`.
 
-    `module` is from `build/QueryEngine/RuntimeFunctions.bc` and it
+    `llvm_module` is from `build/QueryEngine/RuntimeFunctions.bc` and it
     contains `func` and `wrapper_func`.  `module` should also contain
     the definitions of user-defined table functions.
 
     `live_funcs` contains table_func_kernel and call_table_function
 
-    `gpu_target.cgen_state->module_` appears to be the same as `module`
+    `gpu_target.cgen_state->module_` appears to be the same as `llvm_module`
    */
-  CHECK(gpu_target.cgen_state->module_ == module);
-  module->setDataLayout(
+  CHECK(gpu_target.cgen_state->module_ == llvm_module);
+  llvm_module->setDataLayout(
       "e-p:64:64:64-i1:8:8-i8:8:8-"
       "i16:16:16-i32:32:32-i64:64:64-"
       "f32:32:32-f64:64:64-v16:16:16-"
       "v32:32:32-v64:64:64-v128:128:128-n16:32:64");
-  module->setTargetTriple("nvptx64-nvidia-cuda");
+  llvm_module->setTargetTriple("nvptx64-nvidia-cuda");
   CHECK(gpu_target.nvptx_target_machine);
   llvm::PassManagerBuilder pass_manager_builder = llvm::PassManagerBuilder();
 
@@ -1107,22 +1158,22 @@ std::shared_ptr<GpuCompilationContext> CodeGenerator::generateNativeGPUCode(
   llvm::legacy::PassManager module_pass_manager;
   pass_manager_builder.populateModulePassManager(module_pass_manager);
 
-  bool requires_libdevice = check_module_requires_libdevice(module);
+  bool requires_libdevice = check_module_requires_libdevice(llvm_module);
 
   if (requires_libdevice) {
-    linkModuleWithLibdevice(executor, *module, pass_manager_builder, gpu_target);
+    linkModuleWithLibdevice(executor, *llvm_module, pass_manager_builder, gpu_target);
   }
 
   // run optimizations
-  optimize_ir(func, module, module_pass_manager, live_funcs, is_gpu_smem_used, co);
+  optimize_ir(func, llvm_module, module_pass_manager, live_funcs, is_gpu_smem_used, co);
   legalize_nvvm_ir(func);
 
   std::stringstream ss;
   llvm::raw_os_ostream os(ss);
 
-  llvm::LLVMContext& ctx = module->getContext();
+  llvm::LLVMContext& ctx = llvm_module->getContext();
   // Get "nvvm.annotations" metadata node
-  llvm::NamedMDNode* md = module->getOrInsertNamedMetadata("nvvm.annotations");
+  llvm::NamedMDNode* md = llvm_module->getOrInsertNamedMetadata("nvvm.annotations");
 
   llvm::Metadata* md_vals[] = {llvm::ConstantAsMetadata::get(wrapper_func),
                                llvm::MDString::get(ctx, "kernel"),
@@ -1147,7 +1198,7 @@ std::shared_ptr<GpuCompilationContext> CodeGenerator::generateNativeGPUCode(
   }
 
   if (requires_libdevice) {
-    for (llvm::Function& F : *module) {
+    for (llvm::Function& F : *llvm_module) {
       // Some libdevice functions calls another functions that starts with "__internal_"
       // prefix.
       // __internal_trig_reduction_slowpathd
@@ -1167,7 +1218,7 @@ std::shared_ptr<GpuCompilationContext> CodeGenerator::generateNativeGPUCode(
 
   if (executor->has_udf_module(/*is_gpu=*/true)) {
     for (auto& f : executor->get_udf_module(/*is_gpu=*/true)->getFunctionList()) {
-      llvm::Function* udf_function = module->getFunction(f.getName());
+      llvm::Function* udf_function = llvm_module->getFunction(f.getName());
 
       if (udf_function) {
         legalize_nvvm_ir(udf_function);
@@ -1184,7 +1235,7 @@ std::shared_ptr<GpuCompilationContext> CodeGenerator::generateNativeGPUCode(
 
   if (executor->has_rt_udf_module(/*is_gpu=*/true)) {
     for (auto& f : executor->get_rt_udf_module(/*is_gpu=*/true)->getFunctionList()) {
-      llvm::Function* udf_function = module->getFunction(f.getName());
+      llvm::Function* udf_function = llvm_module->getFunction(f.getName());
       if (udf_function) {
         legalize_nvvm_ir(udf_function);
         roots.insert(udf_function);
@@ -1199,7 +1250,7 @@ std::shared_ptr<GpuCompilationContext> CodeGenerator::generateNativeGPUCode(
   }
 
   std::vector<llvm::Function*> rt_funcs;
-  for (auto& Fn : *module) {
+  for (auto& Fn : *llvm_module) {
     if (roots.count(&Fn)) {
       continue;
     }
@@ -1210,16 +1261,16 @@ std::shared_ptr<GpuCompilationContext> CodeGenerator::generateNativeGPUCode(
   }
 
   if (requires_libdevice) {
-    add_intrinsics_to_module(module);
+    add_intrinsics_to_module(llvm_module);
   }
 
-  module->print(os, nullptr);
+  llvm_module->print(os, nullptr);
   os.flush();
 
   for (auto& pFn : rt_funcs) {
-    module->getFunctionList().push_back(pFn);
+    llvm_module->getFunctionList().push_back(pFn);
   }
-  module->eraseNamedMetadata(md);
+  llvm_module->eraseNamedMetadata(md);
 
   auto cuda_llir = ss.str() + cuda_rt_decls + extension_function_decls(udf_declarations);
   std::string ptx;
@@ -1271,7 +1322,6 @@ std::shared_ptr<CompilationContext> Executor::optimizeAndCodegenGPU(
     const CompilationOptions& co) {
 #ifdef HAVE_CUDA
   auto timer = DEBUG_TIMER(__func__);
-  auto module = multifrag_query_func->getParent();
 
   CHECK(cuda_mgr);
   CodeCacheKey key{serialize_llvm_object(query_func),
@@ -1282,7 +1332,7 @@ std::shared_ptr<CompilationContext> Executor::optimizeAndCodegenGPU(
   for (const auto helper : cgen_state_->helper_functions_) {
     key.push_back(serialize_llvm_object(helper));
   }
-  auto cached_code = getCodeFromCache(key, gpu_code_cache_);
+  auto cached_code = Executor::gpu_code_accessor->get_value(key);
   if (cached_code) {
     return cached_code;
   }
@@ -1313,26 +1363,6 @@ std::shared_ptr<CompilationContext> Executor::optimizeAndCodegenGPU(
                                       row_func_not_inlined};
   std::shared_ptr<GpuCompilationContext> compilation_context;
 
-  if (check_module_requires_libdevice(module)) {
-    if (g_rt_libdevice_module == nullptr) {
-      // raise error
-      throw std::runtime_error(
-          "libdevice library is not available but required by the UDF module");
-    }
-
-    // Bind libdevice it to the current module
-    CodeGenerator::link_udf_module(g_rt_libdevice_module,
-                                   *module,
-                                   cgen_state_.get(),
-                                   llvm::Linker::Flags::OverrideFromSrc);
-
-    // activate nvvm-reflect-ftz flag on the module
-    module->addModuleFlag(llvm::Module::Override, "nvvm-reflect-ftz", (int)1);
-    for (llvm::Function& fn : *module) {
-      fn.addFnAttr("nvptx-f32ftz", "true");
-    }
-  }
-
   try {
     compilation_context = CodeGenerator::generateNativeGPUCode(this,
                                                                query_func,
@@ -1346,9 +1376,10 @@ std::shared_ptr<CompilationContext> Executor::optimizeAndCodegenGPU(
       // Thrown if memory not able to be allocated on gpu
       // Retry once after evicting portion of code cache
       LOG(WARNING) << "Failed to allocate GPU memory for generated code. Evicting "
-                   << g_fraction_code_cache_to_evict * 100.
+                   << config_->cache.gpu_fraction_code_cache_to_evict * 100.
                    << "% of GPU code cache and re-trying.";
-      gpu_code_cache_.evictFractionEntries(g_fraction_code_cache_to_evict);
+      Executor::gpu_code_accessor->evictFractionEntries(
+          config_->cache.gpu_fraction_code_cache_to_evict);
       compilation_context = CodeGenerator::generateNativeGPUCode(this,
                                                                  query_func,
                                                                  multifrag_query_func,
@@ -1360,7 +1391,8 @@ std::shared_ptr<CompilationContext> Executor::optimizeAndCodegenGPU(
       throw;
     }
   }
-  addCodeToCache(key, compilation_context, module, gpu_code_cache_);
+  Executor::gpu_code_accessor->put(key, compilation_context);
+
   return std::dynamic_pointer_cast<CompilationContext>(compilation_context);
 #else
   return nullptr;
@@ -1375,8 +1407,8 @@ std::string CodeGenerator::generatePTX(const std::string& cuda_llir,
 
   llvm::SMDiagnostic parse_error;
 
-  auto module = llvm::parseIR(mem_buff->getMemBufferRef(), parse_error, context);
-  if (!module) {
+  auto llvm_module = llvm::parseIR(mem_buff->getMemBufferRef(), parse_error, context);
+  if (!llvm_module) {
     LOG(IR) << "CodeGenerator::generatePTX:NVVM IR:\n" << cuda_llir << "\nEnd of NNVM IR";
     throw_parseIR_error(parse_error, "generatePTX", /* is_gpu= */ true);
   }
@@ -1386,7 +1418,7 @@ std::string CodeGenerator::generatePTX(const std::string& cuda_llir,
   CHECK(nvptx_target_machine);
   {
     llvm::legacy::PassManager ptxgen_pm;
-    module->setDataLayout(nvptx_target_machine->createDataLayout());
+    llvm_module->setDataLayout(nvptx_target_machine->createDataLayout());
 
 #if LLVM_VERSION_MAJOR >= 10
     nvptx_target_machine->addPassesToEmitFile(
@@ -1395,7 +1427,7 @@ std::string CodeGenerator::generatePTX(const std::string& cuda_llir,
     nvptx_target_machine->addPassesToEmitFile(
         ptxgen_pm, formatted_os, nullptr, llvm::TargetMachine::CGFT_AssemblyFile);
 #endif
-    ptxgen_pm.run(*module);
+    ptxgen_pm.run(*llvm_module);
   }
 
 #if LLVM_VERSION_MAJOR >= 11
@@ -1409,8 +1441,12 @@ std::unique_ptr<llvm::TargetMachine> CodeGenerator::initializeNVPTXBackend(
     const CudaMgr_Namespace::NvidiaDeviceArch arch) {
   auto timer = DEBUG_TIMER(__func__);
   llvm::InitializeAllTargets();
+#ifndef ENABLE_ORCJIT
   llvm::InitializeAllTargetMCs();
+#else
+  // Fails with ORC backend on CUDA
   llvm::InitializeAllAsmPrinters();
+#endif
   std::string err;
   auto target = llvm::TargetRegistry::lookupTarget("nvptx64", err);
   if (!target) {
@@ -1532,7 +1568,7 @@ namespace {
 void bind_pos_placeholders(const std::string& pos_fn_name,
                            const bool use_resume_param,
                            llvm::Function* query_func,
-                           llvm::Module* module) {
+                           llvm::Module* llvm_module) {
   for (auto it = llvm::inst_begin(query_func), e = llvm::inst_end(query_func); it != e;
        ++it) {
     if (!llvm::isa<llvm::CallInst>(*it)) {
@@ -1544,12 +1580,12 @@ void bind_pos_placeholders(const std::string& pos_fn_name,
         const auto error_code_arg = get_arg_by_name(query_func, "error_code");
         llvm::ReplaceInstWithInst(
             &pos_call,
-            llvm::CallInst::Create(module->getFunction(pos_fn_name + "_impl"),
+            llvm::CallInst::Create(llvm_module->getFunction(pos_fn_name + "_impl"),
                                    error_code_arg));
       } else {
         llvm::ReplaceInstWithInst(
             &pos_call,
-            llvm::CallInst::Create(module->getFunction(pos_fn_name + "_impl")));
+            llvm::CallInst::Create(llvm_module->getFunction(pos_fn_name + "_impl")));
       }
       break;
     }
@@ -1610,7 +1646,7 @@ void set_row_func_argnames(llvm::Function* row_func,
 llvm::Function* create_row_function(const size_t in_col_count,
                                     const size_t agg_col_count,
                                     const bool hoist_literals,
-                                    llvm::Module* module,
+                                    llvm::Module* llvm_module,
                                     llvm::LLVMContext& context) {
   std::vector<llvm::Type*> row_process_arg_types;
 
@@ -1663,8 +1699,8 @@ llvm::Function* create_row_function(const size_t in_col_count,
   auto ft =
       llvm::FunctionType::get(get_int_type(32, context), row_process_arg_types, false);
 
-  auto row_func =
-      llvm::Function::Create(ft, llvm::Function::ExternalLinkage, "row_func", module);
+  auto row_func = llvm::Function::Create(
+      ft, llvm::Function::ExternalLinkage, "row_func", llvm_module);
 
   // set the row function argument names; for debugging purposes only
   set_row_func_argnames(row_func, in_col_count, agg_col_count, hoist_literals);
@@ -1676,7 +1712,7 @@ llvm::Function* create_row_function(const size_t in_col_count,
 void bind_query(llvm::Function* query_func,
                 const std::string& query_fname,
                 llvm::Function* multifrag_query_func,
-                llvm::Module* module) {
+                llvm::Module* llvm_module) {
   std::vector<llvm::CallInst*> query_stubs;
   for (auto it = llvm::inst_begin(multifrag_query_func),
             e = llvm::inst_end(multifrag_query_func);
@@ -1801,7 +1837,7 @@ void Executor::addUdfIrToModule(const std::string& udf_ir_filename,
 }
 
 std::unordered_set<llvm::Function*> CodeGenerator::markDeadRuntimeFuncs(
-    llvm::Module& module,
+    llvm::Module& llvm_module,
     const std::vector<llvm::Function*>& roots,
     const std::vector<llvm::Function*>& leaves) {
   auto timer = DEBUG_TIMER(__func__);
@@ -1809,10 +1845,10 @@ std::unordered_set<llvm::Function*> CodeGenerator::markDeadRuntimeFuncs(
   live_funcs.insert(roots.begin(), roots.end());
   live_funcs.insert(leaves.begin(), leaves.end());
 
-  if (auto F = module.getFunction("init_shared_mem_nop")) {
+  if (auto F = llvm_module.getFunction("init_shared_mem_nop")) {
     live_funcs.insert(F);
   }
-  if (auto F = module.getFunction("write_back_nop")) {
+  if (auto F = llvm_module.getFunction("write_back_nop")) {
     live_funcs.insert(F);
   }
 
@@ -1826,7 +1862,7 @@ std::unordered_set<llvm::Function*> CodeGenerator::markDeadRuntimeFuncs(
     }
   }
 
-  for (llvm::Function& F : module) {
+  for (llvm::Function& F : llvm_module) {
     if (!live_funcs.count(&F) && !F.isDeclaration()) {
       F.setLinkage(llvm::GlobalValue::InternalLinkage);
     }
@@ -1989,6 +2025,10 @@ void Executor::createErrorCheckControlFlow(
             int32_t num_shift_by_blockDim = shared::getExpOfTwo(blockSize());
             int64_t total_num_shift = num_shift_by_gridDim + num_shift_by_blockDim;
             uint64_t interrupt_checking_freq = 32;
+            // TODO: get from ExecutionOptions
+            auto freq_control_knob = config_->exec.interrupt.running_query_interrupt_freq;
+            CHECK_GT(freq_control_knob, 0);
+            CHECK_LE(freq_control_knob, 1.0);
             if (!input_table_infos.empty()) {
               const auto& outer_table_info = *input_table_infos.begin();
               auto num_outer_table_tuples = outer_table_info.info.getNumTuples();
@@ -2017,6 +2057,20 @@ void Executor::createErrorCheckControlFlow(
                   // too small `max_inc`, so this correction is necessary to make
                   // `interrupt_checking_freq` be valid (i.e., larger than zero)
                   max_inc = 2;
+                }
+                auto calibrated_inc = uint64_t(floor(max_inc * (1 - freq_control_knob)));
+                interrupt_checking_freq =
+                    uint64_t(pow(2, shared::getExpOfTwo(calibrated_inc)));
+                // add the coverage when interrupt_checking_freq > K
+                // if so, some threads still cannot be branched to the interrupt checker
+                // so we manually use smaller but close to the max_inc as freq
+                if (interrupt_checking_freq > max_inc) {
+                  interrupt_checking_freq = max_inc / 2;
+                }
+                if (interrupt_checking_freq < 8) {
+                  // such small freq incurs too frequent interrupt status checking,
+                  // so we fixup to the minimum freq value at some reasonable degree
+                  interrupt_checking_freq = 8;
                 }
               }
             }
@@ -2067,8 +2121,18 @@ void Executor::createErrorCheckControlFlow(
         if (!err_lv_returned_from_row_func) {
           err_lv_returned_from_row_func = err_lv;
         }
-        err_lv = ir_builder.CreateICmp(
-            llvm::ICmpInst::ICMP_NE, err_lv, cgen_state_->llInt(static_cast<int32_t>(0)));
+        if (device_type == ExecutorDeviceType::GPU && run_with_dynamic_watchdog) {
+          // let kernel execution finish as expected, regardless of the observed error,
+          // unless it is from the dynamic watchdog where all threads within that block
+          // return together.
+          err_lv = ir_builder.CreateICmp(llvm::ICmpInst::ICMP_EQ,
+                                         err_lv,
+                                         cgen_state_->llInt(Executor::ERR_OUT_OF_TIME));
+        } else {
+          err_lv = ir_builder.CreateICmp(llvm::ICmpInst::ICMP_NE,
+                                         err_lv,
+                                         cgen_state_->llInt(static_cast<int32_t>(0)));
+        }
         auto error_bb = llvm::BasicBlock::Create(
             cgen_state_->context_, ".error_exit", query_func, new_bb);
         const auto error_code_arg = get_arg_by_name(query_func, "error_code");
@@ -2307,7 +2371,8 @@ bool is_gpu_shared_mem_supported(const QueryMemoryDescriptor* query_mem_desc_ptr
                                  const CudaMgr_Namespace::CudaMgr* cuda_mgr,
                                  const ExecutorDeviceType device_type,
                                  const unsigned gpu_blocksize,
-                                 const unsigned num_blocks_per_mp) {
+                                 const unsigned num_blocks_per_mp,
+                                 const Config& config) {
   if (device_type == ExecutorDeviceType::CPU) {
     return false;
   }
@@ -2330,8 +2395,35 @@ bool is_gpu_shared_mem_supported(const QueryMemoryDescriptor* query_mem_desc_ptr
   }
 
   if (query_mem_desc_ptr->getQueryDescriptionType() ==
+          QueryDescriptionType::NonGroupedAggregate &&
+      config.exec.group_by.enable_gpu_smem_non_grouped_agg &&
+      query_mem_desc_ptr->countDistinctDescriptorsLogicallyEmpty()) {
+    // TODO: relax this, if necessary
+    if (gpu_blocksize < query_mem_desc_ptr->getEntryCount()) {
+      return false;
+    }
+    // skip shared memory usage when dealing with 1) variable length targets, 2)
+    // not a COUNT aggregate
+    const auto target_infos = target_exprs_to_infos(
+        ra_exe_unit.target_exprs, *query_mem_desc_ptr, config.exec.group_by.bigint_count);
+    std::unordered_set<SQLAgg> supported_aggs{kCOUNT};
+    if (std::find_if(target_infos.begin(),
+                     target_infos.end(),
+                     [&supported_aggs](const TargetInfo& ti) {
+                       if (ti.sql_type.is_varlen() ||
+                           !supported_aggs.count(ti.agg_kind)) {
+                         return true;
+                       } else {
+                         return false;
+                       }
+                     }) == target_infos.end()) {
+      return true;
+    }
+  }
+
+  if (query_mem_desc_ptr->getQueryDescriptionType() ==
           QueryDescriptionType::GroupByPerfectHash &&
-      g_enable_smem_group_by) {
+      config.exec.group_by.enable_gpu_smem_group_by) {
     /**
      * To simplify the implementation for practical purposes, we
      * initially provide shared memory support for cases where there are at most as many
@@ -2353,7 +2445,9 @@ bool is_gpu_shared_mem_supported(const QueryMemoryDescriptor* query_mem_desc_ptr
         query_mem_desc_ptr->countDistinctDescriptorsLogicallyEmpty() &&
         !query_mem_desc_ptr->useStreamingTopN()) {
       const size_t shared_memory_threshold_bytes = std::min(
-          SIZE_MAX,
+          config.exec.group_by.gpu_smem_threshold == 0
+              ? SIZE_MAX
+              : config.exec.group_by.gpu_smem_threshold,
           cuda_mgr->getMinSharedMemoryPerBlockForAllDevices() / num_blocks_per_mp);
       const auto output_buffer_size =
           query_mem_desc_ptr->getRowSize() * query_mem_desc_ptr->getEntryCount();
@@ -2364,9 +2458,13 @@ bool is_gpu_shared_mem_supported(const QueryMemoryDescriptor* query_mem_desc_ptr
       // skip shared memory usage when dealing with 1) variable length targets, 2)
       // non-basic aggregates (COUNT, SUM, MIN, MAX, AVG)
       // TODO: relax this if necessary
-      const auto target_infos =
-          target_exprs_to_infos(ra_exe_unit.target_exprs, *query_mem_desc_ptr);
+      const auto target_infos = target_exprs_to_infos(ra_exe_unit.target_exprs,
+                                                      *query_mem_desc_ptr,
+                                                      config.exec.group_by.bigint_count);
       std::unordered_set<SQLAgg> supported_aggs{kCOUNT};
+      if (config.exec.group_by.enable_gpu_smem_grouped_non_count_agg) {
+        supported_aggs = {kCOUNT, kMIN, kMAX, kSUM, kAVG};
+      }
       if (std::find_if(target_infos.begin(),
                        target_infos.end(),
                        [&supported_aggs](const TargetInfo& ti) {
@@ -2489,7 +2587,7 @@ Executor::compileWorkUnit(const std::vector<InputTableInfo>& query_infos,
   // cgenstate_manager uses RAII pattern to manage the live time of
   // CgenState instances.
   Executor::CgenStateManager cgenstate_manager(
-      *this, allow_lazy_fetch, query_infos, &ra_exe_unit);
+      *this, allow_lazy_fetch, query_infos, &ra_exe_unit);  // locks compilation mutex
 
   addTransientStringLiterals(ra_exe_unit, row_set_mem_owner);
 
@@ -2521,10 +2619,18 @@ Executor::compileWorkUnit(const std::vector<InputTableInfo>& query_infos,
                                   cuda_mgr,
                                   co.device_type,
                                   cuda_mgr ? this->blockSize() : 1,
-                                  cuda_mgr ? this->numBlocksPerMP() : 1);
+                                  cuda_mgr ? this->numBlocksPerMP() : 1,
+                                  getConfig());
   if (gpu_shared_mem_optimization) {
     // disable interleaved bins optimization on the GPU
     query_mem_desc->setHasInterleavedBinsOnGpu(false);
+    LOG(DEBUG1) << "GPU shared memory is used for the " +
+                       query_mem_desc->queryDescTypeToString() + " query(" +
+                       std::to_string(get_shared_memory_size(gpu_shared_mem_optimization,
+                                                             query_mem_desc.get())) +
+                       " out of " +
+                       std::to_string(config_->exec.group_by.gpu_smem_threshold) +
+                       " bytes).";
   }
 
   const GpuSharedMemoryContext gpu_smem_context(
@@ -2613,6 +2719,18 @@ Executor::compileWorkUnit(const std::vector<InputTableInfo>& query_infos,
   cgen_state_->row_func_bb_ =
       llvm::BasicBlock::Create(cgen_state_->context_, "entry", cgen_state_->row_func_);
 
+  if (config_->exec.codegen.enable_filter_function) {
+    auto filter_func_ft =
+        llvm::FunctionType::get(get_int_type(32, cgen_state_->context_), {}, false);
+    cgen_state_->filter_func_ = llvm::Function::Create(filter_func_ft,
+                                                       llvm::Function::ExternalLinkage,
+                                                       "filter_func",
+                                                       cgen_state_->module_);
+    CHECK(cgen_state_->filter_func_);
+    cgen_state_->filter_func_bb_ = llvm::BasicBlock::Create(
+        cgen_state_->context_, "entry", cgen_state_->filter_func_);
+  }
+
   cgen_state_->current_func_ = cgen_state_->row_func_;
   cgen_state_->ir_builder_.SetInsertPoint(cgen_state_->row_func_bb_);
 
@@ -2688,8 +2806,10 @@ Executor::compileWorkUnit(const std::vector<InputTableInfo>& query_infos,
   }
 
   // Aggregate
-  plan_state_->init_agg_vals_ =
-      init_agg_val_vec(ra_exe_unit.target_exprs, ra_exe_unit.quals, *query_mem_desc);
+  plan_state_->init_agg_vals_ = init_agg_val_vec(ra_exe_unit.target_exprs,
+                                                 ra_exe_unit.quals,
+                                                 *query_mem_desc,
+                                                 getConfig().exec.group_by.bigint_count);
 
   /*
    * If we have decided to use GPU shared memory (decision is not made here), then
@@ -2706,9 +2826,12 @@ Executor::compileWorkUnit(const std::vector<InputTableInfo>& query_infos,
           cgen_state_->module_,
           cgen_state_->context_,
           *query_mem_desc,
-          target_exprs_to_infos(ra_exe_unit.target_exprs, *query_mem_desc),
+          target_exprs_to_infos(ra_exe_unit.target_exprs,
+                                *query_mem_desc,
+                                getConfig().exec.group_by.bigint_count),
           plan_state_->init_agg_vals_,
-          executor_id_);
+          executor_id_,
+          getConfig());
       gpu_smem_code.codegen();
       gpu_smem_code.injectFunctionsInto(query_func);
 

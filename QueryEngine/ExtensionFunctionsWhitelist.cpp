@@ -212,15 +212,6 @@ std::string serialize_type(const ExtArgumentType type,
   return "";
 }
 
-std::string drop_suffix(const std::string& str) {
-  const auto idx = str.find("__");
-  if (idx == std::string::npos) {
-    return str;
-  }
-  CHECK_GT(idx, std::string::size_type(0));
-  return str.substr(0, idx);
-}
-
 }  // namespace
 
 SQLTypeInfo ext_arg_type_to_type_info(const ExtArgumentType ext_arg_type) {
@@ -443,10 +434,6 @@ std::string ExtensionFunctionsWhitelist::toStringSQL(const ExtArgumentType& sig_
   return "";
 }
 
-const std::string ExtensionFunction::getName(bool keep_suffix) const {
-  return (keep_suffix ? name_ : drop_suffix(name_));
-}
-
 std::string ExtensionFunction::toString() const {
   return getName() + "(" + ExtensionFunctionsWhitelist::toString(args_) + ") -> " +
          serialize_type(ret_);
@@ -665,7 +652,8 @@ void ExtensionFunctionsWhitelist::addCommon(SignatureMap& signatures,
          ++args_serialized_it) {
       args.push_back(deserialize_type(json_str(*args_serialized_it)));
     }
-    signatures[to_upper(drop_suffix(name))].emplace_back(name, args, ret);
+    signatures[to_upper(ExtensionFunction::drop_suffix(name))].emplace_back(
+        name, args, ret);
   }
 }
 

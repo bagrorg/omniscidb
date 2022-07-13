@@ -27,9 +27,6 @@
 #include "DataMgr/DataMgrDataProvider.h"
 
 extern bool g_is_test_env;
-extern bool g_enable_watchdog;
-extern size_t g_big_group_threshold;
-extern size_t g_watchdog_baseline_max_groups;
 
 using namespace TestHelpers;
 using namespace TestHelpers::ArrowSQLRunner;
@@ -64,7 +61,6 @@ TEST_F(HighCardinalityStringEnv, PerfectHashNoFallback) {
       Executor::UNITARY_EXECUTOR_ID, getDataMgr(), getDataMgr()->getBufferProvider());
   auto storage = getStorage();
   executor->setSchemaProvider(storage);
-  executor->setDatabaseId(TEST_DB_ID);
 
   auto tinfo = storage->getTableInfo(TEST_DB_ID, "high_cardinality_str");
   auto colStrInfo = storage->getColumnInfo(*tinfo, "str");
@@ -74,11 +70,12 @@ TEST_F(HighCardinalityStringEnv, PerfectHashNoFallback) {
   InputColDescriptor filter_col_desc{colXInfo, 0};
 
   std::unordered_set<InputColDescriptor> col_descs{group_col_desc, filter_col_desc};
-  std::unordered_set<int> phys_table_ids;
-  phys_table_ids.insert(group_col_desc.getTableId());
+  std::unordered_set<std::pair<int, int>> phys_table_ids;
+  phys_table_ids.insert({group_col_desc.getDatabaseId(), group_col_desc.getTableId()});
   executor->setupCaching(getDataMgr()->getDataProvider(), col_descs, phys_table_ids);
 
-  auto input_descs = std::vector<InputDescriptor>{InputDescriptor(tinfo->table_id, 0)};
+  auto input_descs =
+      std::vector<InputDescriptor>{InputDescriptor(tinfo->db_id, tinfo->table_id, 0)};
   std::list<std::shared_ptr<const InputColDescriptor>> input_col_descs;
   input_col_descs.push_back(std::make_shared<InputColDescriptor>(colStrInfo, 0));
   input_col_descs.push_back(std::make_shared<InputColDescriptor>(colXInfo, 0));
@@ -106,7 +103,8 @@ TEST_F(HighCardinalityStringEnv, PerfectHashNoFallback) {
                                   {count_expr.get()},
                                   nullptr,
                                   SortInfo{},
-                                  0};
+                                  0,
+                                  RegisteredQueryHint::fromConfig(executor->getConfig())};
 
   ColumnCacheMap column_cache;
   size_t max_groups_buffer_entry_guess = 1;
@@ -136,8 +134,8 @@ std::unordered_set<InputColDescriptor> setup_str_col_caching(
     DataProvider* data_provider,
     Executor* executor) {
   std::unordered_set<InputColDescriptor> col_descs{group_col_desc, filter_col_desc};
-  std::unordered_set<int> phys_table_ids;
-  phys_table_ids.insert(group_col_desc.getTableId());
+  std::unordered_set<std::pair<int, int>> phys_table_ids;
+  phys_table_ids.insert({group_col_desc.getDatabaseId(), group_col_desc.getTableId()});
   executor->setupCaching(data_provider, col_descs, phys_table_ids);
   auto filter_col_range =
       executor->getColRange({filter_col_desc.getColId(), filter_col_desc.getTableId()});
@@ -157,7 +155,6 @@ TEST_F(HighCardinalityStringEnv, BaselineFallbackTest) {
       Executor::UNITARY_EXECUTOR_ID, getDataMgr(), getDataMgr()->getBufferProvider());
   auto storage = getStorage();
   executor->setSchemaProvider(storage);
-  executor->setDatabaseId(TEST_DB_ID);
 
   auto tinfo = storage->getTableInfo(TEST_DB_ID, "high_cardinality_str");
   auto colStrInfo = storage->getColumnInfo(*tinfo, "str");
@@ -174,7 +171,8 @@ TEST_F(HighCardinalityStringEnv, BaselineFallbackTest) {
                                            getDataMgr()->getDataProvider(),
                                            executor.get());
 
-  auto input_descs = std::vector<InputDescriptor>{InputDescriptor(tinfo->table_id, 0)};
+  auto input_descs =
+      std::vector<InputDescriptor>{InputDescriptor(tinfo->db_id, tinfo->table_id, 0)};
   std::list<std::shared_ptr<const InputColDescriptor>> input_col_descs;
   input_col_descs.push_back(std::make_shared<InputColDescriptor>(colStrInfo, 0));
   input_col_descs.push_back(std::make_shared<InputColDescriptor>(colXInfo, 0));
@@ -202,7 +200,8 @@ TEST_F(HighCardinalityStringEnv, BaselineFallbackTest) {
                                   {count_expr.get()},
                                   nullptr,
                                   SortInfo{},
-                                  0};
+                                  0,
+                                  RegisteredQueryHint::fromConfig(executor->getConfig())};
 
   ColumnCacheMap column_cache;
   size_t max_groups_buffer_entry_guess = 1;
@@ -242,7 +241,6 @@ TEST_F(HighCardinalityStringEnv, BaselineNoFilters) {
       Executor::UNITARY_EXECUTOR_ID, getDataMgr(), getDataMgr()->getBufferProvider());
   auto storage = getStorage();
   executor->setSchemaProvider(storage);
-  executor->setDatabaseId(TEST_DB_ID);
 
   auto tinfo = storage->getTableInfo(TEST_DB_ID, "high_cardinality_str");
   auto colStrInfo = storage->getColumnInfo(*tinfo, "str");
@@ -259,7 +257,8 @@ TEST_F(HighCardinalityStringEnv, BaselineNoFilters) {
                                            getDataMgr()->getDataProvider(),
                                            executor.get());
 
-  auto input_descs = std::vector<InputDescriptor>{InputDescriptor(tinfo->table_id, 0)};
+  auto input_descs =
+      std::vector<InputDescriptor>{InputDescriptor(tinfo->db_id, tinfo->table_id, 0)};
   std::list<std::shared_ptr<const InputColDescriptor>> input_col_descs;
   input_col_descs.push_back(std::make_shared<InputColDescriptor>(colStrInfo, 0));
   input_col_descs.push_back(std::make_shared<InputColDescriptor>(colXInfo, 0));
@@ -268,8 +267,7 @@ TEST_F(HighCardinalityStringEnv, BaselineNoFilters) {
 
   auto count_expr = makeExpr<Analyzer::AggExpr>(
       SQLTypeInfo(kBIGINT, false), kCOUNT, nullptr, false, nullptr);
-  auto group_expr = makeExpr<Analyzer::ColumnVar>(
-      colStrInfo->type, tinfo->table_id, colStrInfo->column_id, 0);
+  auto group_expr = makeExpr<Analyzer::ColumnVar>(colStrInfo, 0);
 
   RelAlgExecutionUnit ra_exe_unit{input_descs,
                                   input_col_descs,
@@ -280,7 +278,8 @@ TEST_F(HighCardinalityStringEnv, BaselineNoFilters) {
                                   {count_expr.get()},
                                   nullptr,
                                   SortInfo{},
-                                  0};
+                                  0,
+                                  RegisteredQueryHint::fromConfig(executor->getConfig())};
 
   ColumnCacheMap column_cache;
   size_t max_groups_buffer_entry_guess = 1;
@@ -316,7 +315,7 @@ class LowCardinalityThresholdTest : public ::testing::Test {
                 {{"fl", dictType()}, {"ar", dictType()}, {"dep", dictType()}});
 
     std::stringstream ss;
-    for (size_t i = 0; i < g_big_group_threshold; i++) {
+    for (size_t i = 0; i < config().exec.group_by.big_group_threshold; i++) {
       ss << i << ", " << i + 1 << ", " << i + 2 << std::endl;
     }
     insertCsvValues("low_cardinality", ss.str());
@@ -331,35 +330,36 @@ TEST_F(LowCardinalityThresholdTest, GroupBy) {
 
     auto result = run_multiple_agg(
         R"(select fl,ar,dep from low_cardinality group by fl,ar,dep;)", dt);
-    EXPECT_EQ(result->rowCount(), g_big_group_threshold);
+    EXPECT_EQ(result->rowCount(), config().exec.group_by.big_group_threshold);
   }
 }
 
 class BigCardinalityThresholdTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    g_enable_watchdog = true;
-    initial_g_watchdog_baseline_max_groups = g_watchdog_baseline_max_groups;
-    g_watchdog_baseline_max_groups = g_big_group_threshold + 1;
+    config().exec.watchdog.enable = true;
+    initial_baseline_max_groups = config().exec.watchdog.baseline_max_groups;
+    config().exec.watchdog.baseline_max_groups =
+        config().exec.group_by.big_group_threshold + 1;
 
     createTable("big_cardinality",
                 {{"fl", dictType()}, {"ar", dictType()}, {"dep", dictType()}});
 
     std::stringstream ss;
     // add enough groups to trigger the watchdog exception if we use a poor estimate
-    for (size_t i = 0; i < g_watchdog_baseline_max_groups; i++) {
+    for (size_t i = 0; i < config().exec.watchdog.baseline_max_groups; i++) {
       ss << i << ", " << i + 1 << ", " << i + 2 << std::endl;
     }
     insertCsvValues("big_cardinality", ss.str());
   }
 
   void TearDown() override {
-    g_enable_watchdog = false;
-    g_watchdog_baseline_max_groups = initial_g_watchdog_baseline_max_groups;
+    config().exec.watchdog.enable = false;
+    config().exec.watchdog.baseline_max_groups = initial_baseline_max_groups;
     dropTable("big_cardinality");
   }
 
-  size_t initial_g_watchdog_baseline_max_groups{0};
+  size_t initial_baseline_max_groups{0};
 };
 
 TEST_F(BigCardinalityThresholdTest, EmptyFilters) {

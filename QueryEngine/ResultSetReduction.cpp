@@ -39,9 +39,6 @@
 #include <future>
 #include <numeric>
 
-extern bool g_enable_dynamic_watchdog;
-extern bool g_enable_non_kernel_time_query_interrupt;
-
 namespace {
 
 bool use_multithreaded_reduction(const size_t entry_count) {
@@ -207,7 +204,8 @@ void result_set::fill_empty_key(void* key_ptr,
 void ResultSetStorage::reduce(const ResultSetStorage& that,
                               const std::vector<std::string>& serialized_varlen_buffer,
                               const ReductionCode& reduction_code,
-                              const size_t executor_id) const {
+                              const size_t executor_id,
+                              const Config& config) const {
   auto entry_count = query_mem_desc_.getEntryCount();
   CHECK_GT(entry_count, size_t(0));
   if (query_mem_desc_.didOutputColumnar()) {
@@ -261,10 +259,14 @@ void ResultSetStorage::reduce(const ResultSetStorage& that,
       } else {
         threading::parallel_for(
             threading::blocked_range<size_t>(0, that_entry_count),
-            [this, this_buff, that_buff, that_entry_count, &that](auto r) {
+            [this, this_buff, that_buff, that_entry_count, &that, &config](auto r) {
               for (size_t entry_idx = r.begin(); entry_idx < r.end(); ++entry_idx) {
-                reduceOneEntryBaseline(
-                    this_buff, that_buff, entry_idx, that_entry_count, that);
+                reduceOneEntryBaseline(this_buff,
+                                       that_buff,
+                                       entry_idx,
+                                       that_entry_count,
+                                       that,
+                                       config.exec.watchdog.enable_dynamic);
               }
             });
       }
@@ -282,7 +284,12 @@ void ResultSetStorage::reduce(const ResultSetStorage& that,
                            nullptr);
       } else {
         for (size_t i = 0; i < that_entry_count; ++i) {
-          reduceOneEntryBaseline(this_buff, that_buff, i, that_entry_count, that);
+          reduceOneEntryBaseline(this_buff,
+                                 that_buff,
+                                 i,
+                                 that_entry_count,
+                                 that,
+                                 config.exec.watchdog.enable_dynamic);
         }
       }
     }
@@ -402,12 +409,14 @@ void ResultSetStorage::reduceEntriesNoCollisionsColWise(
       // all slot pairs are arrays.
       two_slot_target = true;
     }
-    if (UNLIKELY(g_enable_non_kernel_time_query_interrupt && executor &&
-                 executor->checkNonKernelTimeInterrupted())) {
+    if (UNLIKELY(
+            executor &&
+            executor->getConfig().exec.interrupt.enable_non_kernel_time_query_interrupt &&
+            executor->checkNonKernelTimeInterrupted())) {
       throw std::runtime_error(
           "Query execution was interrupted during result set reduction");
     }
-    if (g_enable_dynamic_watchdog) {
+    if (executor->getConfig().exec.watchdog.enable_dynamic) {
       check_watchdog();
     }
     for (size_t target_slot_idx = slots_for_col.front();
@@ -776,8 +785,9 @@ void ResultSetStorage::reduceOneEntryBaseline(int8_t* this_buff,
                                               const int8_t* that_buff,
                                               const size_t that_entry_idx,
                                               const size_t that_entry_count,
-                                              const ResultSetStorage& that) const {
-  if (g_enable_dynamic_watchdog) {
+                                              const ResultSetStorage& that,
+                                              bool enable_dynamic_watchdog) const {
+  if (enable_dynamic_watchdog) {
     check_watchdog_with_seed(that_entry_idx);
   }
   const auto key_count = query_mem_desc_.getGroupbyColCount();
@@ -997,7 +1007,8 @@ void ResultSet::initializeStorage() const {
 // layout, which can have collisions, cannot be done in place and something needs
 // to take the ownership of the new result set with the bigger underlying buffer.
 ResultSet* ResultSetManager::reduce(std::vector<ResultSet*>& result_sets,
-                                    const size_t executor_id) {
+                                    const size_t executor_id,
+                                    const Config& config) {
   CHECK(!result_sets.empty());
   auto result_rs = result_sets.front();
   CHECK(result_rs->storage_);
@@ -1006,10 +1017,6 @@ ResultSet* ResultSetManager::reduce(std::vector<ResultSet*>& result_sets,
   const auto row_set_mem_owner = result_rs->row_set_mem_owner_;
   for (const auto result_set : result_sets) {
     CHECK_EQ(row_set_mem_owner, result_set->row_set_mem_owner_);
-  }
-  const auto db_id = result_rs->db_id_for_dict_;
-  for (const auto result_set : result_sets) {
-    CHECK_EQ(db_id, result_set->db_id_for_dict_);
   }
   if (first_result.query_mem_desc_.getQueryDescriptionType() ==
       QueryDescriptionType::GroupByBaselineHash) {
@@ -1029,7 +1036,6 @@ ResultSet* ResultSetManager::reduce(std::vector<ResultSet*>& result_sets,
                             row_set_mem_owner,
                             result_rs->data_mgr_,
                             result_rs->buffer_provider_,
-                            db_id,
                             0,
                             0));
     auto result_storage = rs_->allocateStorage(first_result.target_init_vals_);
@@ -1065,7 +1071,8 @@ ResultSet* ResultSetManager::reduce(std::vector<ResultSet*>& result_sets,
   ResultSetReductionJIT reduction_jit(result_rs->getQueryMemDesc(),
                                       result_rs->getTargetInfos(),
                                       result_rs->getTargetInitVals(),
-                                      executor_id);
+                                      executor_id,
+                                      config);
   auto reduction_code = reduction_jit.codegen();
   size_t ctr = 1;
   for (auto result_it = result_sets.begin() + 1; result_it != result_sets.end();
@@ -1074,9 +1081,10 @@ ResultSet* ResultSetManager::reduce(std::vector<ResultSet*>& result_sets,
       result->reduce(*((*result_it)->storage_),
                      serialized_varlen_buffer[ctr++],
                      reduction_code,
-                     executor_id);
+                     executor_id,
+                     config);
     } else {
-      result->reduce(*((*result_it)->storage_), {}, reduction_code, executor_id);
+      result->reduce(*((*result_it)->storage_), {}, reduction_code, executor_id, config);
     }
   }
   return result_rs;

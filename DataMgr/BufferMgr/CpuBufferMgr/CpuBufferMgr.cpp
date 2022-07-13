@@ -16,7 +16,6 @@
 
 #include "DataMgr/BufferMgr/CpuBufferMgr/CpuBufferMgr.h"
 
-#include "CudaMgr/CudaMgr.h"
 #include "DataMgr/Allocators/ArenaAllocator.h"
 #include "DataMgr/BufferMgr/CpuBufferMgr/CpuBuffer.h"
 
@@ -47,12 +46,19 @@ void CpuBufferMgr::allocateBuffer(BufferList::iterator seg_it,
   new CpuBuffer(this,
                 seg_it,
                 device_id_,
-                cuda_mgr_,
+                gpu_mgr_,
                 page_size,
                 initial_size);  // this line is admittedly a bit weird but
                                 // the segment iterator passed into buffer
                                 // takes the address of the new Buffer in its
                                 // buffer member
+}
+
+AbstractBuffer* CpuBufferMgr::allocateZeroCopyBuffer(
+    BufferList::iterator seg_it,
+    const size_t page_size,
+    std::unique_ptr<AbstractDataToken> token) {
+  return new CpuBuffer(this, seg_it, device_id_, page_size, std::move(token), gpu_mgr_);
 }
 
 void CpuBufferMgr::initializeMem() {

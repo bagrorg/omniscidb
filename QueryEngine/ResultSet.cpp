@@ -21,7 +21,7 @@
  */
 
 #include "ResultSet.h"
-#include "DataMgr/Allocators/CudaAllocator.h"
+#include "DataMgr/Allocators/GpuAllocator.h"
 #include "DataMgr/BufferMgr/BufferMgr.h"
 #include "Execute.h"
 #include "GpuMemUtils.h"
@@ -47,14 +47,7 @@
 #include <future>
 #include <numeric>
 
-size_t g_parallel_top_min = 100e3;
-size_t g_parallel_top_max = 20e6;  // In effect only with g_enable_watchdog.
-size_t g_streaming_topn_max = 100e3;
-
 constexpr int64_t uninitialized_cached_row_count{-1};
-
-extern bool g_enable_direct_columnarization;
-extern bool g_enable_watchdog;
 
 void ResultSet::keepFirstN(const size_t n) {
   invalidateCachedRowCount();
@@ -72,7 +65,6 @@ ResultSet::ResultSet(const std::vector<TargetInfo>& targets,
                      const std::shared_ptr<RowSetMemoryOwner> row_set_mem_owner,
                      Data_Namespace::DataMgr* data_mgr,
                      BufferProvider* buffer_provider,
-                     const int db_id_for_dict,
                      const unsigned block_size,
                      const unsigned grid_size)
     : targets_(targets)
@@ -88,7 +80,6 @@ ResultSet::ResultSet(const std::vector<TargetInfo>& targets,
     , grid_size_(grid_size)
     , data_mgr_(data_mgr)
     , buffer_provider_(buffer_provider)
-    , db_id_for_dict_(db_id_for_dict)
     , separate_varlen_storage_valid_(false)
     , just_explain_(false)
     , for_validation_only_(false)
@@ -105,7 +96,6 @@ ResultSet::ResultSet(const std::vector<TargetInfo>& targets,
                      const std::shared_ptr<RowSetMemoryOwner> row_set_mem_owner,
                      Data_Namespace::DataMgr* data_mgr,
                      BufferProvider* buffer_provider,
-                     const int db_id_for_dict,
                      const unsigned block_size,
                      const unsigned grid_size)
     : targets_(targets)
@@ -125,7 +115,6 @@ ResultSet::ResultSet(const std::vector<TargetInfo>& targets,
     , consistent_frag_sizes_{consistent_frag_sizes}
     , data_mgr_(data_mgr)
     , buffer_provider_(buffer_provider)
-    , db_id_for_dict_(db_id_for_dict)
     , separate_varlen_storage_valid_(false)
     , just_explain_(false)
     , for_validation_only_(false)
@@ -135,8 +124,7 @@ ResultSet::ResultSet(const std::shared_ptr<const Analyzer::Estimator> estimator,
                      const ExecutorDeviceType device_type,
                      const int device_id,
                      Data_Namespace::DataMgr* data_mgr,
-                     BufferProvider* buffer_provider,
-                     const int db_id_for_dict)
+                     BufferProvider* buffer_provider)
     : device_type_(device_type)
     , device_id_(device_id)
     , query_mem_desc_{}
@@ -144,13 +132,12 @@ ResultSet::ResultSet(const std::shared_ptr<const Analyzer::Estimator> estimator,
     , estimator_(estimator)
     , data_mgr_(data_mgr)
     , buffer_provider_(buffer_provider)
-    , db_id_for_dict_(db_id_for_dict)
     , separate_varlen_storage_valid_(false)
     , just_explain_(false)
     , for_validation_only_(false)
     , cached_row_count_(uninitialized_cached_row_count) {
   if (device_type == ExecutorDeviceType::GPU) {
-    device_estimator_buffer_ = CudaAllocator::allocGpuAbstractBuffer(
+    device_estimator_buffer_ = GpuAllocator::allocGpuAbstractBuffer(
         buffer_provider_, estimator_->getBufferSize(), device_id_);
     buffer_provider_->zeroDeviceMem(device_estimator_buffer_->getMemoryPtr(),
                                     estimator_->getBufferSize(),
@@ -335,8 +322,7 @@ SQLTypeInfo ResultSet::getColType(const size_t col_idx) const {
 
 StringDictionaryProxy* ResultSet::getStringDictionaryProxy(int const dict_id) const {
   constexpr bool with_generation = true;
-  return row_set_mem_owner_->getOrAddStringDictProxy(
-      db_id_for_dict_, dict_id, with_generation);
+  return row_set_mem_owner_->getOrAddStringDictProxy(dict_id, with_generation);
 }
 
 class ResultSet::CellCallback {
@@ -766,7 +752,7 @@ void ResultSet::sort(const std::list<Analyzer::OrderEntry>& order_entries,
 #endif  // HAVE_CUDA
   if (query_mem_desc_.sortOnGpu()) {
     try {
-      radixSortOnGpu(order_entries);
+      radixSortOnGpu(executor ? executor->getConfig() : Config(), order_entries);
     } catch (const OutOfMemory&) {
       LOG(WARNING) << "Out of GPU memory during sort, finish on CPU";
       radixSortOnCpu(order_entries);
@@ -783,17 +769,20 @@ void ResultSet::sort(const std::list<Analyzer::OrderEntry>& order_entries,
 
   CHECK(permutation_.empty());
 
-  if (top_n && g_parallel_top_min < entryCount()) {
-    if (g_enable_watchdog && g_parallel_top_max < entryCount()) {
+  if (top_n && executor && executor->getConfig().exec.parallel_top_min < entryCount()) {
+    if (executor->getConfig().exec.watchdog.enable &&
+        executor->getConfig().exec.watchdog.parallel_top_max < entryCount()) {
       throw WatchdogException("Sorting the result would be too slow");
     }
     parallelTop(order_entries, top_n, executor);
   } else {
-    if (g_enable_watchdog && Executor::baseline_threshold < entryCount()) {
+    if (executor && executor->getConfig().exec.watchdog.enable &&
+        executor->getConfig().exec.group_by.baseline_threshold < entryCount()) {
       throw WatchdogException("Sorting the result would be too slow");
     }
 
     if (top_n == 0 && size_t(1) == order_entries.size() &&
+        (!executor || executor->getConfig().rs.enable_direct_columnarization) &&
         isDirectColumnarConversionPossible() && query_mem_desc_.didOutputColumnar() &&
         query_mem_desc_.getQueryDescriptionType() == QueryDescriptionType::Projection) {
       const auto& order_entry = order_entries.front();
@@ -1235,16 +1224,18 @@ PermutationView ResultSet::topPermutation(PermutationView permutation,
 }
 
 void ResultSet::radixSortOnGpu(
+    const Config& config,
     const std::list<Analyzer::OrderEntry>& order_entries) const {
   auto timer = DEBUG_TIMER(__func__);
   const int device_id{0};
-  CudaAllocator cuda_allocator(buffer_provider_, device_id);
+  GpuAllocator cuda_allocator(buffer_provider_, device_id);
   CHECK_GT(block_size_, 0);
   CHECK_GT(grid_size_, 0);
   std::vector<int64_t*> group_by_buffers(block_size_);
   group_by_buffers[0] = reinterpret_cast<int64_t*>(storage_->getUnderlyingBuffer());
   auto dev_group_by_buffers =
       create_dev_group_by_buffers(&cuda_allocator,
+                                  config,
                                   group_by_buffers,
                                   query_mem_desc_,
                                   block_size_,
@@ -1318,8 +1309,8 @@ size_t ResultSet::getLimit() const {
 
 const std::vector<std::string> ResultSet::getStringDictionaryPayloadCopy(
     const int dict_id) const {
-  const auto sdp = row_set_mem_owner_->getOrAddStringDictProxy(
-      db_id_for_dict_, dict_id, /*with_generation=*/true);
+  const auto sdp =
+      row_set_mem_owner_->getOrAddStringDictProxy(dict_id, /*with_generation=*/true);
   CHECK(sdp);
   return sdp->getDictionary()->copyStrings();
 }
@@ -1353,8 +1344,7 @@ ResultSet::getUniqueStringsForDictEncodedTargetCol(const size_t col_idx) const {
   }
 
   const int32_t dict_id = col_type_info.get_comp_param();
-  const auto sdp = row_set_mem_owner_->getOrAddStringDictProxy(db_id_for_dict_,
-                                                               dict_id,
+  const auto sdp = row_set_mem_owner_->getOrAddStringDictProxy(dict_id,
                                                                /*with_generation=*/true);
   CHECK(sdp);
 
@@ -1369,9 +1359,7 @@ ResultSet::getUniqueStringsForDictEncodedTargetCol(const size_t col_idx) const {
  * becomes equivalent to the row-wise columnarization.
  */
 bool ResultSet::isDirectColumnarConversionPossible() const {
-  if (!g_enable_direct_columnarization) {
-    return false;
-  } else if (query_mem_desc_.didOutputColumnar()) {
+  if (query_mem_desc_.didOutputColumnar()) {
     return permutation_.empty() && (query_mem_desc_.getQueryDescriptionType() ==
                                         QueryDescriptionType::Projection ||
                                     (query_mem_desc_.getQueryDescriptionType() ==

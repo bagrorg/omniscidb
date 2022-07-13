@@ -25,7 +25,7 @@
 QueryFragmentDescriptor::QueryFragmentDescriptor(
     const RelAlgExecutionUnit& ra_exe_unit,
     const std::vector<InputTableInfo>& query_infos,
-    const std::vector<Data_Namespace::MemoryInfo>& gpu_mem_infos,
+    const std::vector<Buffer_Namespace::MemoryInfo>& gpu_mem_infos,
     const double gpu_input_mem_limit_percent,
     std::vector<size_t> allowed_outer_fragment_indices)
     : allowed_outer_fragment_indices_(allowed_outer_fragment_indices)
@@ -159,8 +159,10 @@ void QueryFragmentDescriptor::buildFragmentPerKernelForTable(
                                             i,
                                             selected_tables_fragments_,
                                             executor->getInnerTabIdToJoinCond());
+      const auto db_id = ra_exe_unit.input_descs[*table_desc_offset].getDatabaseId();
       const auto table_id = ra_exe_unit.input_descs[*table_desc_offset].getTableId();
-      execution_kernel_desc.fragments.emplace_back(FragmentsPerTable{table_id, frag_ids});
+      execution_kernel_desc.fragments.emplace_back(
+          FragmentsPerTable{db_id, table_id, frag_ids});
 
     } else {
       for (size_t j = 0; j < ra_exe_unit.input_descs.size(); ++j) {
@@ -171,12 +173,13 @@ void QueryFragmentDescriptor::buildFragmentPerKernelForTable(
                                               i,
                                               selected_tables_fragments_,
                                               executor->getInnerTabIdToJoinCond());
+        const auto db_id = ra_exe_unit.input_descs[j].getDatabaseId();
         const auto table_id = ra_exe_unit.input_descs[j].getTableId();
         auto table_frags_it = selected_tables_fragments_.find(table_id);
         CHECK(table_frags_it != selected_tables_fragments_.end());
 
         execution_kernel_desc.fragments.emplace_back(
-            FragmentsPerTable{table_id, frag_ids});
+            FragmentsPerTable{db_id, table_id, frag_ids});
       }
     }
 
@@ -203,14 +206,14 @@ void QueryFragmentDescriptor::buildFragmentPerKernelMapForUnion(
 
   for (size_t j = 0; j < ra_exe_unit.input_descs.size(); ++j) {
     auto const& table_desc = ra_exe_unit.input_descs[j];
+    int db_id = table_desc.getDatabaseId();
     int const table_id = table_desc.getTableId();
     TableFragments const* fragments = selected_tables_fragments_.at(table_id);
 
     bool is_temporary_table = false;
     if (table_id > 0) {
       // Temporary tables will not have a table descriptor and not have deleted rows.
-      const auto table_info =
-          schema_provider->getTableInfo(executor->getDatabaseId(), table_id);
+      const auto table_info = schema_provider->getTableInfo(db_id, table_id);
       CHECK(table_info);
       if (table_info->isTemporary()) {
         // for temporary tables, we won't have delete column metadata available. However,
@@ -266,6 +269,7 @@ void QueryFragmentDescriptor::buildFragmentPerKernelMap(
     const size_t num_bytes_for_row,
     Executor* executor) {
   const auto& outer_table_desc = ra_exe_unit.input_descs.front();
+  const int db_id = outer_table_desc.getDatabaseId();
   const int outer_table_id = outer_table_desc.getTableId();
   auto it = selected_tables_fragments_.find(outer_table_id);
   CHECK(it != selected_tables_fragments_.end());
@@ -275,8 +279,7 @@ void QueryFragmentDescriptor::buildFragmentPerKernelMap(
   bool is_temporary_table = false;
   if (outer_table_id > 0) {
     auto schema_provider = executor->getSchemaProvider();
-    auto table_info =
-        schema_provider->getTableInfo(executor->getDatabaseId(), outer_table_id);
+    auto table_info = schema_provider->getTableInfo(db_id, outer_table_id);
     CHECK(table_info);
     // Temporary tables will not have a table descriptor and not have deleted rows.
     if (table_info->isTemporary()) {
@@ -351,6 +354,7 @@ void QueryFragmentDescriptor::buildMultifragKernelMap(
       checkDeviceMemoryUsage(fragment, device_id, num_bytes_for_row);
     }
     for (size_t j = 0; j < ra_exe_unit.input_descs.size(); ++j) {
+      const auto db_id = ra_exe_unit.input_descs[j].getDatabaseId();
       const auto table_id = ra_exe_unit.input_descs[j].getTableId();
       auto table_frags_it = selected_tables_fragments_.find(table_id);
       CHECK(table_frags_it != selected_tables_fragments_.end());
@@ -379,7 +383,7 @@ void QueryFragmentDescriptor::buildMultifragKernelMap(
 
       auto& kernel_frag_list = execution_kernel.fragments;
       if (kernel_frag_list.size() < j + 1) {
-        kernel_frag_list.emplace_back(FragmentsPerTable{table_id, frag_ids});
+        kernel_frag_list.emplace_back(FragmentsPerTable{db_id, table_id, frag_ids});
       } else {
         CHECK_EQ(kernel_frag_list[j].table_id, table_id);
         auto& curr_frag_ids = kernel_frag_list[j].fragment_ids;

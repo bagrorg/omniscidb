@@ -18,6 +18,7 @@
 #include "Shared/toString.h"
 
 #include <memory>
+#include <unordered_map>
 #include <unordered_set>
 
 struct ColumnRef {

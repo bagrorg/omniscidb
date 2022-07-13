@@ -18,34 +18,26 @@
 
 #include "DataRecycler.h"
 #include "QueryEngine/JoinHashTable/HashJoin.h"
-
-extern size_t g_hashtable_cache_total_bytes;
-extern size_t g_max_cacheable_hashtable_size_bytes;
+#include "Shared/Config.h"
 
 struct QueryPlanMetaInfo {
   QueryPlan query_plan_dag;
   std::string inner_col_info_string;
 };
 
-struct OverlapsHashTableMetaInfo {
-  size_t overlaps_max_table_size_bytes;
-  double overlaps_bucket_threshold;
-  std::vector<double> bucket_sizes;
-};
-
 struct HashtableCacheMetaInfo {
   std::optional<QueryPlanMetaInfo> query_plan_meta_info;
-  std::optional<OverlapsHashTableMetaInfo> overlaps_meta_info;
 };
 
 class HashtableRecycler
     : public DataRecycler<std::shared_ptr<HashTable>, HashtableCacheMetaInfo> {
  public:
-  HashtableRecycler(CacheItemType hashtable_type, int num_gpus)
+  HashtableRecycler(ConfigPtr config, CacheItemType hashtable_type, int num_gpus)
       : DataRecycler({hashtable_type},
-                     g_hashtable_cache_total_bytes,
-                     g_max_cacheable_hashtable_size_bytes,
-                     num_gpus) {}
+                     config->cache.hashtable_cache_total_bytes,
+                     config->cache.max_cacheable_hashtable_size_bytes,
+                     num_gpus)
+      , config_(config) {}
 
   std::shared_ptr<HashTable> getItemFromCache(
       QueryPlanHash key,
@@ -68,10 +60,6 @@ class HashtableRecycler
   void clearCache() override;
 
   std::string toString() const override;
-
-  bool checkOverlapsHashtableBucketCompatability(
-      const OverlapsHashTableMetaInfo& candidate_bucket_dim,
-      const OverlapsHashTableMetaInfo& target_bucket_dim) const;
 
   static std::pair<QueryPlanHash, HashtableCacheMetaInfo> getHashtableCacheKey(
       const std::vector<InnerOuter>& inner_outer_pairs,
@@ -134,4 +122,6 @@ class HashtableRecycler
       size_t required_size,
       std::lock_guard<std::mutex>& lock,
       std::optional<HashtableCacheMetaInfo> meta_info = std::nullopt) override;
+
+  ConfigPtr config_;
 };

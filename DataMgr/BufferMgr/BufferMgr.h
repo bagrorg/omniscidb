@@ -26,6 +26,7 @@
 
 #define BOOST_STACKTRACE_GNU_SOURCE_NOT_REQUIRED 1
 
+#include <condition_variable>
 #include <iostream>
 #include <list>
 #include <map>
@@ -86,6 +87,23 @@ using namespace Data_Namespace;
 
 namespace Buffer_Namespace {
 
+struct MemoryData {
+  size_t slabNum;
+  int32_t startPage;
+  size_t numPages;
+  uint32_t touch;
+  std::vector<int32_t> chunk_key;
+  MemStatus memStatus;
+};
+
+struct MemoryInfo {
+  size_t pageSize;
+  size_t maxNumPages;
+  size_t numPageAllocated;
+  bool isAllocationCapped;
+  std::vector<MemoryData> nodeMemoryData;
+};
+
 /**
  * @class   BufferMgr
  * @brief
@@ -130,6 +148,9 @@ class BufferMgr : public AbstractBufferMgr {  // implements
                                const size_t page_size = 0,
                                const size_t initial_size = 0) override;
 
+  AbstractBuffer* createZeroCopyBuffer(const ChunkKey& chunk_key,
+                                       std::unique_ptr<AbstractDataToken> token) override;
+
   /// Deletes the chunk with the specified key
   void deleteBuffer(const ChunkKey& key, const bool purge = true) override;
   void deleteBuffersWithPrefix(const ChunkKey& key_prefix,
@@ -137,6 +158,9 @@ class BufferMgr : public AbstractBufferMgr {  // implements
 
   /// Returns the a pointer to the chunk with the specified key.
   AbstractBuffer* getBuffer(const ChunkKey& key, const size_t num_bytes = 0) override;
+
+  std::unique_ptr<AbstractDataToken> getZeroCopyBufferMemory(const ChunkKey& key,
+                                                             size_t numBytes) override;
 
   /**
    * @brief Puts the contents of d into the Buffer with ChunkKey key.
@@ -148,16 +172,7 @@ class BufferMgr : public AbstractBufferMgr {  // implements
   void fetchBuffer(const ChunkKey& key,
                    AbstractBuffer* dest_buffer,
                    const size_t num_bytes = 0) override;
-  AbstractBuffer* putBuffer(const ChunkKey& key,
-                            AbstractBuffer* d,
-                            const size_t num_bytes = 0) override;
-  void checkpoint() override;
-  void checkpoint(const int db_id, const int tb_id) override;
-  void removeTableRelatedDS(const int db_id, const int table_id) override;
-
-  const DictDescriptor* getDictMetadata(int db_id,
-                                        int dict_id,
-                                        bool load_dict = true) override {
+  const DictDescriptor* getDictMetadata(int dict_id, bool load_dict = true) override {
     UNREACHABLE();
     return nullptr;
   }
@@ -179,6 +194,8 @@ class BufferMgr : public AbstractBufferMgr {  // implements
                                      const size_t num_bytes);
   void getChunkMetadataVecForKeyPrefix(ChunkMetadataVector& chunk_metadata_vec,
                                        const ChunkKey& key_prefix) override;
+
+  MemoryInfo getMemoryInfo();
 
  protected:
   const size_t
@@ -204,13 +221,23 @@ class BufferMgr : public AbstractBufferMgr {  // implements
   virtual void allocateBuffer(BufferList::iterator seg_it,
                               const size_t page_size,
                               const size_t num_bytes) = 0;
+  virtual AbstractBuffer* allocateZeroCopyBuffer(
+      BufferList::iterator seg_it,
+      const size_t page_size,
+      std::unique_ptr<AbstractDataToken> token) {
+    UNREACHABLE();
+    return nullptr;
+  }
   void clear();
 
   std::mutex chunk_index_mutex_;
   std::mutex sized_segs_mutex_;
   std::mutex unsized_segs_mutex_;
   std::mutex buffer_id_mutex_;
-  std::mutex global_mutex_;
+  // This map is used for granular locks in case of parallel requests
+  // to fetch the same chunk that is not in chunk_index yet. Access
+  // to this map should be synced throug chunk_index_mutex_.
+  std::map<ChunkKey, std::shared_ptr<std::condition_variable>> in_progress_buffer_cvs_;
 
   std::map<ChunkKey, BufferList::iterator> chunk_index_;
   size_t max_buffer_pool_num_pages_;  // max number of pages for buffer pool

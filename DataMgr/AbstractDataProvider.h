@@ -32,6 +32,19 @@ class AbstractDataProvider : public Data_Namespace::AbstractBufferMgr {
     return nullptr;
   }
 
+  Data_Namespace::AbstractBuffer* createZeroCopyBuffer(
+      const ChunkKey& key,
+      std::unique_ptr<Data_Namespace::AbstractDataToken> token) override {
+    UNREACHABLE();
+    return nullptr;
+  }
+
+  std::unique_ptr<Data_Namespace::AbstractDataToken> getZeroCopyBufferMemory(
+      const ChunkKey& key,
+      size_t numBytes) override {
+    return nullptr;
+  }
+
   void deleteBuffer(const ChunkKey& key, const bool purge = true) override {
     UNREACHABLE();
   }
@@ -42,13 +55,6 @@ class AbstractDataProvider : public Data_Namespace::AbstractBufferMgr {
   }
 
   Data_Namespace::AbstractBuffer* getBuffer(const ChunkKey& key,
-                                            const size_t numBytes = 0) override {
-    UNREACHABLE();
-    return nullptr;
-  }
-
-  Data_Namespace::AbstractBuffer* putBuffer(const ChunkKey& key,
-                                            Data_Namespace::AbstractBuffer* srcBuffer,
                                             const size_t numBytes = 0) override {
     UNREACHABLE();
     return nullptr;
@@ -89,17 +95,7 @@ class AbstractDataProvider : public Data_Namespace::AbstractBufferMgr {
     return false;
   }
 
-  void checkpoint() override { UNREACHABLE(); }
-
-  void checkpoint(const int db_id, const int tb_id) override { UNREACHABLE(); }
-
-  void removeTableRelatedDS(const int db_id, const int table_id) override {
-    UNREACHABLE();
-  }
-
-  const DictDescriptor* getDictMetadata(int db_id,
-                                        int dict_id,
-                                        bool load_dict = true) override {
+  const DictDescriptor* getDictMetadata(int dict_id, bool load_dict = true) override {
     UNREACHABLE();
     return nullptr;
   }

@@ -69,7 +69,6 @@ TEST(Construct, Allocate) {
                                                            Executor::getArenaBlockSize()),
                        nullptr,
                        nullptr,
-                       -1,
                        0,
                        0);
   result_set.allocateStorage();
@@ -893,7 +892,6 @@ void test_iterate(const std::vector<TargetInfo>& target_infos,
                        row_set_mem_owner,
                        nullptr,
                        nullptr,
-                       -1,
                        0,
                        0);
   for (size_t i = 0; i < query_mem_desc.getEntryCount(); ++i) {
@@ -1016,7 +1014,6 @@ void run_reduction(const std::vector<TargetInfo>& target_infos,
                                                row_set_mem_owner,
                                                nullptr,
                                                nullptr,
-                                               -1,
                                                0,
                                                0);
   storage1 = rs1->allocateStorage();
@@ -1028,7 +1025,6 @@ void run_reduction(const std::vector<TargetInfo>& target_infos,
                                                row_set_mem_owner,
                                                nullptr,
                                                nullptr,
-                                               -1,
                                                0,
                                                0);
   storage2 = rs2->allocateStorage();
@@ -1036,7 +1032,7 @@ void run_reduction(const std::vector<TargetInfo>& target_infos,
       storage2->getUnderlyingBuffer(), target_infos, query_mem_desc, generator2, step);
   ResultSetManager rs_manager;
   std::vector<ResultSet*> storage_set{rs1.get(), rs2.get()};
-  rs_manager.reduce(storage_set, Executor::UNITARY_EXECUTOR_ID);
+  rs_manager.reduce(storage_set, Executor::UNITARY_EXECUTOR_ID, config());
 }
 
 void test_reduce(const std::vector<TargetInfo>& target_infos,
@@ -1056,7 +1052,6 @@ void test_reduce(const std::vector<TargetInfo>& target_infos,
                                                row_set_mem_owner,
                                                nullptr,
                                                nullptr,
-                                               -1,
                                                0,
                                                0);
   storage1 = rs1->allocateStorage();
@@ -1068,7 +1063,6 @@ void test_reduce(const std::vector<TargetInfo>& target_infos,
                                                row_set_mem_owner,
                                                nullptr,
                                                nullptr,
-                                               -1,
                                                0,
                                                0);
   storage2 = rs2->allocateStorage();
@@ -1076,7 +1070,8 @@ void test_reduce(const std::vector<TargetInfo>& target_infos,
       storage2->getUnderlyingBuffer(), target_infos, query_mem_desc, generator2, step);
   ResultSetManager rs_manager;
   std::vector<ResultSet*> storage_set{rs1.get(), rs2.get()};
-  auto result_rs = rs_manager.reduce(storage_set, Executor::UNITARY_EXECUTOR_ID);
+  auto result_rs =
+      rs_manager.reduce(storage_set, Executor::UNITARY_EXECUTOR_ID, config());
 
   if (sort) {
     std::list<Analyzer::OrderEntry> order_entries;
@@ -1164,7 +1159,6 @@ void test_reduce_random_groups(const std::vector<TargetInfo>& target_infos,
                               row_set_mem_owner,
                               nullptr,
                               nullptr,
-                              -1,
                               0,
                               0));
       storage1 = rs1->allocateStorage();
@@ -1174,7 +1168,6 @@ void test_reduce_random_groups(const std::vector<TargetInfo>& target_infos,
                               row_set_mem_owner,
                               nullptr,
                               nullptr,
-                              -1,
                               0,
                               0));
       storage2 = rs2->allocateStorage();
@@ -1187,7 +1180,6 @@ void test_reduce_random_groups(const std::vector<TargetInfo>& target_infos,
                               row_set_mem_owner,
                               nullptr,
                               nullptr,
-                              -1,
                               0,
                               0));
       storage1 = rs1->allocateStorage();
@@ -1197,7 +1189,6 @@ void test_reduce_random_groups(const std::vector<TargetInfo>& target_infos,
                               row_set_mem_owner,
                               nullptr,
                               nullptr,
-                              -1,
                               0,
                               0));
       storage2 = rs2->allocateStorage();
@@ -1223,7 +1214,8 @@ void test_reduce_random_groups(const std::vector<TargetInfo>& target_infos,
 
   ResultSetManager rs_manager;
   std::vector<ResultSet*> storage_set{rs1.get(), rs2.get()};
-  auto result_rs = rs_manager.reduce(storage_set, Executor::UNITARY_EXECUTOR_ID);
+  auto result_rs =
+      rs_manager.reduce(storage_set, Executor::UNITARY_EXECUTOR_ID, config());
   std::queue<std::vector<int64_t>> ref_table = rse->getReferenceTable();
   std::vector<bool> ref_group_map = rse->getReferenceGroupMap();
   const auto result = get_rows_sorted_by_col(*result_rs, 0);
@@ -1870,37 +1862,59 @@ TEST(Reduce, BaselineHashColumnar) {
 #ifndef HAVE_TSAN
 // The large buffers tests allocate too much memory to instrument under TSAN
 TEST(ReduceLargeBuffers, PerfectHashOne_Overflow32) {
-  const auto target_infos = generate_random_groups_nullable_target_infos();
-  auto query_mem_desc = perfect_hash_one_col_desc(target_infos, 8, 0, 222208903, {8});
-  EvenNumberGenerator gen1;
-  EvenNumberGenerator gen2;
-  test_reduce(target_infos, query_mem_desc, gen1, gen2, 2, false);
+  try {
+    const auto target_infos = generate_random_groups_nullable_target_infos();
+    auto query_mem_desc = perfect_hash_one_col_desc(target_infos, 8, 0, 222208903, {8});
+    EvenNumberGenerator gen1;
+    EvenNumberGenerator gen2;
+    test_reduce(target_infos, query_mem_desc, gen1, gen2, 2, false);
+  } catch (const std::bad_alloc&) {
+    LOG(WARNING) << "Out-of-memory for ReduceLargeBuffers.PerfectHashOne_Overflow32";
+    GTEST_SKIP();
+  }
 }
 
 TEST(ReduceLargeBuffers, PerfectHashColumnarOne_Overflow32) {
-  const auto target_infos = generate_random_groups_nullable_target_infos();
-  auto query_mem_desc = perfect_hash_one_col_desc(target_infos, 8, 0, 222208903, {8});
-  query_mem_desc.setOutputColumnar(true);
-  EvenNumberGenerator gen1;
-  EvenNumberGenerator gen2;
-  test_reduce(target_infos, query_mem_desc, gen1, gen2, 2, false);
+  try {
+    const auto target_infos = generate_random_groups_nullable_target_infos();
+    auto query_mem_desc = perfect_hash_one_col_desc(target_infos, 8, 0, 222208903, {8});
+    query_mem_desc.setOutputColumnar(true);
+    EvenNumberGenerator gen1;
+    EvenNumberGenerator gen2;
+    test_reduce(target_infos, query_mem_desc, gen1, gen2, 2, false);
+  } catch (const std::bad_alloc&) {
+    LOG(WARNING)
+        << "Out-of-memory for ReduceLargeBuffers.PerfectHashColumnarOne_Overflow32";
+    GTEST_SKIP();
+  }
 }
 
 TEST(ReduceLargeBuffers, BaselineHash_Overflow32) {
-  const auto target_infos = generate_random_groups_nullable_target_infos();
-  auto query_mem_desc = baseline_hash_two_col_desc_overflow32(target_infos, 8);
-  EvenNumberGenerator gen1;
-  EvenNumberGenerator gen2;
-  run_reduction(target_infos, query_mem_desc, gen1, gen2, 2);
+  try {
+    const auto target_infos = generate_random_groups_nullable_target_infos();
+    auto query_mem_desc = baseline_hash_two_col_desc_overflow32(target_infos, 8);
+    EvenNumberGenerator gen1;
+    EvenNumberGenerator gen2;
+    run_reduction(target_infos, query_mem_desc, gen1, gen2, 2);
+  } catch (const std::bad_alloc&) {
+    LOG(WARNING) << "Out-of-memory for ReduceLargeBuffers.BaselineHash_Overflow32";
+    GTEST_SKIP();
+  }
 }
 
 TEST(ReduceLargeBuffers, BaselineHashColumnar_Overflow32) {
-  const auto target_infos = generate_random_groups_nullable_target_infos();
-  auto query_mem_desc = baseline_hash_two_col_desc_overflow32(target_infos, 8);
-  query_mem_desc.setOutputColumnar(true);
-  EvenNumberGenerator gen1;
-  EvenNumberGenerator gen2;
-  run_reduction(target_infos, query_mem_desc, gen1, gen2, 2);
+  try {
+    const auto target_infos = generate_random_groups_nullable_target_infos();
+    auto query_mem_desc = baseline_hash_two_col_desc_overflow32(target_infos, 8);
+    query_mem_desc.setOutputColumnar(true);
+    EvenNumberGenerator gen1;
+    EvenNumberGenerator gen2;
+    run_reduction(target_infos, query_mem_desc, gen1, gen2, 2);
+  } catch (const std::bad_alloc&) {
+    LOG(WARNING)
+        << "Out-of-memory for ReduceLargeBuffers.BaselineHashColumnar_Overflow32";
+    GTEST_SKIP();
+  }
 }
 #endif
 
@@ -1920,7 +1934,6 @@ TEST(MoreReduce, MissingValues) {
                                                row_set_mem_owner,
                                                nullptr,
                                                nullptr,
-                                               -1,
                                                0,
                                                0);
   const auto storage1 = rs1->allocateStorage();
@@ -1930,7 +1943,6 @@ TEST(MoreReduce, MissingValues) {
                                                row_set_mem_owner,
                                                nullptr,
                                                nullptr,
-                                               -1,
                                                0,
                                                0);
   const auto storage2 = rs2->allocateStorage();
@@ -1961,9 +1973,11 @@ TEST(MoreReduce, MissingValues) {
   ResultSetReductionJIT reduction_jit(rs1->getQueryMemDesc(),
                                       rs1->getTargetInfos(),
                                       rs1->getTargetInitVals(),
-                                      Executor::UNITARY_EXECUTOR_ID);
+                                      Executor::UNITARY_EXECUTOR_ID,
+                                      config());
   const auto reduction_code = reduction_jit.codegen();
-  storage1->reduce(*storage2, {}, reduction_code, Executor::UNITARY_EXECUTOR_ID);
+  storage1->reduce(
+      *storage2, {}, reduction_code, Executor::UNITARY_EXECUTOR_ID, config());
   {
     const auto row = rs1->getNextRow(false, false);
     CHECK_EQ(size_t(2), row.size());
@@ -1998,7 +2012,6 @@ TEST(MoreReduce, MissingValuesKeyless) {
                                                row_set_mem_owner,
                                                nullptr,
                                                nullptr,
-                                               -1,
                                                0,
                                                0);
   const auto storage1 = rs1->allocateStorage();
@@ -2008,7 +2021,6 @@ TEST(MoreReduce, MissingValuesKeyless) {
                                                row_set_mem_owner,
                                                nullptr,
                                                nullptr,
-                                               -1,
                                                0,
                                                0);
   const auto storage2 = rs2->allocateStorage();
@@ -2033,9 +2045,11 @@ TEST(MoreReduce, MissingValuesKeyless) {
   ResultSetReductionJIT reduction_jit(rs1->getQueryMemDesc(),
                                       rs1->getTargetInfos(),
                                       rs1->getTargetInitVals(),
-                                      Executor::UNITARY_EXECUTOR_ID);
+                                      Executor::UNITARY_EXECUTOR_ID,
+                                      config());
   const auto reduction_code = reduction_jit.codegen();
-  storage1->reduce(*storage2, {}, reduction_code, Executor::UNITARY_EXECUTOR_ID);
+  storage1->reduce(
+      *storage2, {}, reduction_code, Executor::UNITARY_EXECUTOR_ID, config());
   {
     const auto row = rs1->getNextRow(false, false);
     CHECK_EQ(size_t(2), row.size());
@@ -2072,7 +2086,6 @@ TEST(MoreReduce, OffsetRewrite) {
                                                row_set_mem_owner,
                                                nullptr,
                                                nullptr,
-                                               -1,
                                                0,
                                                0);
   const auto storage1 = rs1->allocateStorage();
@@ -2082,7 +2095,6 @@ TEST(MoreReduce, OffsetRewrite) {
                                                row_set_mem_owner,
                                                nullptr,
                                                nullptr,
-                                               -1,
                                                0,
                                                0);
   const auto storage2 = rs2->allocateStorage();
@@ -2123,10 +2135,14 @@ TEST(MoreReduce, OffsetRewrite) {
   ResultSetReductionJIT reduction_jit(rs1->getQueryMemDesc(),
                                       rs1->getTargetInfos(),
                                       rs1->getTargetInitVals(),
-                                      Executor::UNITARY_EXECUTOR_ID);
+                                      Executor::UNITARY_EXECUTOR_ID,
+                                      config());
   const auto reduction_code = reduction_jit.codegen();
-  storage1->reduce(
-      *storage2, serialized_varlen_buffer, reduction_code, Executor::UNITARY_EXECUTOR_ID);
+  storage1->reduce(*storage2,
+                   serialized_varlen_buffer,
+                   reduction_code,
+                   Executor::UNITARY_EXECUTOR_ID,
+                   config());
   rs1->setSeparateVarlenStorageValid(true);
   {
     const auto row = rs1->getNextRow(false, false);

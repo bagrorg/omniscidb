@@ -41,9 +41,6 @@
 #include <stack>
 #include <vector>
 
-extern bool g_enable_smem_group_by;
-extern bool g_bigint_count;
-
 struct ColRangeInfo {
   QueryDescriptionType hash_type_;
   int64_t min;
@@ -201,6 +198,7 @@ class GroupByAndAggregate {
   std::tuple<llvm::Value*, llvm::Value*> genLoadHashDesc(llvm::Value* groups_buffer);
 
   Executor* executor_;
+  const Config& config_;
   const RelAlgExecutionUnit& ra_exe_unit_;
   const std::vector<InputTableInfo>& query_infos_;
   std::shared_ptr<RowSetMemoryOwner> row_set_mem_owner_;

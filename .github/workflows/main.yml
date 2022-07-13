@@ -1,40 +1,48 @@
-name: Build the package
+name: Build
 on:
-  workflow_dispatch: []
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: string
+        default: DEV
+
   push:
     paths-ignore:
       - 'docs/**'
+
 jobs:
-  build:
+  clang-format:
     runs-on: ubuntu-latest
-    env:
-      cuda_compiler_version: None
-      RUN_TESTS: 1
-      PREFIX: distr
     steps:
       - uses: actions/checkout@v2
+
       - name: Set the environment
         run: |
-          $CONDA/bin/conda env create -f scripts/mapd-deps-conda-dev-env.yml
-      - name: Build
+          conda update conda
+          $CONDA/bin/conda env create -f scripts/mapd-deps-conda-dev-env.yml --force
+
+      - name: Check stlye
         run: |
-          mkdir -p ${{ env.PREFIX }}
-          $CONDA/bin/conda run -n omnisci-dev bash scripts/conda/build-install-all.sh
-      - name: Test
-        run: |
-          BINPATH=$(cd ${{ env.PREFIX }}/bin; pwd -P)
-          cd build
-          $CONDA/bin/conda run -n omnisci-dev make sanity_tests
-      - name: Upload packages
-        uses: actions/upload-artifact@v2
-        with:
-          name: result_packages
-          path: ${{ env.PREFIX }}
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@v2
-        with:
-          name: logs
-          path: |
-            build/*.log
-            build/CMakeFiles/*.log
+          $CONDA/bin/conda run -n omnisci-dev bash -c "find . -name ThirdParty -prune -or \( -name '*.cpp' -print -or -name '*.h' -print \) | xargs clang-format --dry-run --Werror -style=file"
+
+  build:
+    uses: ./.github/workflows/build.yml
+
+  build-cuda:
+    uses: ./.github/workflows/build.yml
+    with:
+      cuda_compiler_version: 11
+
+  test:
+    needs: build
+    uses: ./.github/workflows/test.yml
+    with:
+      is_conda_updated: ${{ needs.build.outputs.is_conda_updated }}
+
+  perf:
+    needs: build
+    uses: ./.github/workflows/perf.yml
+    with:
+      is_conda_updated: ${{ needs.build.outputs.is_conda_updated }}
+
+

@@ -252,23 +252,6 @@ install_snappy
 VERS=3.52.15
 CFLAGS="-fPIC" CXXFLAGS="-fPIC" download_make_install ${HTTP_DEPS}/libiodbc-${VERS}.tar.gz
 
-# c-blosc
-VERS=1.14.4
-download https://github.com/Blosc/c-blosc/archive/v$VERS.tar.gz
-extract v$VERS.tar.gz
-BDIR="c-blosc-$VERS/build"
-rm -rf "$BDIR"
-mkdir -p "$BDIR"
-pushd "$BDIR"
-cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PREFIX -DBUILD_BENCHMARKS=off -DBUILD_TESTS=off -DPREFER_EXTERNAL_SNAPPY=off -DPREFER_EXTERNAL_ZLIB=off -DPREFER_EXTERNAL_ZSTD=off ..
-makej
-make install
-popd
-
-# Geo Support
-install_gdal
-install_geos
-
 # TBB
 install_tbb static
 
@@ -326,17 +309,6 @@ make install
 popd # build
 popd # SPIRV-Cross-$VERS
 popd # spirv-cross
-
-# Vulkan
-# Custom tarball which excludes the spir-v toolchain
-VERS=1.2.162.0 # stable 12/11/20
-rm -rf vulkan
-mkdir -p vulkan
-pushd vulkan
-wget --continue ${HTTP_DEPS}/vulkansdk-linux-x86_64-no-spirv-$VERS.tar.gz -O vulkansdk-linux-x86_64-no-spirv-$VERS.tar.gz
-tar xvf vulkansdk-linux-x86_64-no-spirv-$VERS.tar.gz
-rsync -av $VERS/x86_64/* $PREFIX
-popd # vulkan
 
 # install opensaml and its dependencies
 VERS=3.2.2

@@ -25,16 +25,12 @@
 #include "ResultSet.h"
 #include "StreamingTopN.h"
 
-#include <Shared/Globals.h>
 #include <Shared/checked_alloc.h>
 #include <ThirdParty/robin_hood.h>
 #include <x86intrin.h>
 
 // 8 GB, the limit of perfect hash group by under normal conditions
 int64_t g_bitmap_memory_limit{8LL * 1000 * 1000 * 1000};
-
-extern bool g_optimize_row_initialization;
-extern size_t g_max_memory_allocation_size;
 
 namespace {
 
@@ -287,7 +283,8 @@ QueryMemoryInitializer::QueryMemoryInitializer(
       group_buffer_size = num_rows * query_mem_desc.getRowSize();
     } else {
       // otherwise, allocate a GPU buffer equivalent to the maximum GPU allocation size
-      group_buffer_size = g_max_memory_allocation_size / query_mem_desc.getRowSize();
+      group_buffer_size = executor->getConfig().mem.gpu.max_memory_allocation_size /
+                          query_mem_desc.getRowSize();
     }
   } else {
     group_buffer_size =
@@ -376,21 +373,22 @@ QueryMemoryInitializer::QueryMemoryInitializer(
     const auto column_frag_sizes =
         get_consistent_frags_sizes(ra_exe_unit.target_exprs, consistent_frag_sizes);
 
-    result_sets_.emplace_back(
-        new ResultSet(target_exprs_to_infos(ra_exe_unit.target_exprs, query_mem_desc),
-                      executor->getColLazyFetchInfo(ra_exe_unit.target_exprs),
-                      col_buffers,
-                      column_frag_offsets,
-                      column_frag_sizes,
-                      device_type,
-                      device_id,
-                      ResultSet::fixupQueryMemoryDescriptor(query_mem_desc),
-                      row_set_mem_owner_,
-                      executor->getDataMgr(),
-                      executor->getBufferProvider(),
-                      executor->getDatabaseId(),
-                      executor->blockSize(),
-                      executor->gridSize()));
+    result_sets_.emplace_back(new ResultSet(
+        target_exprs_to_infos(ra_exe_unit.target_exprs,
+                              query_mem_desc,
+                              executor->getConfig().exec.group_by.bigint_count),
+        executor->getColLazyFetchInfo(ra_exe_unit.target_exprs),
+        col_buffers,
+        column_frag_offsets,
+        column_frag_sizes,
+        device_type,
+        device_id,
+        ResultSet::fixupQueryMemoryDescriptor(query_mem_desc),
+        row_set_mem_owner_,
+        executor->getDataMgr(),
+        executor->getBufferProvider(),
+        executor->blockSize(),
+        executor->gridSize()));
     result_sets_.back()->allocateStorage(reinterpret_cast<int8_t*>(group_by_buffer),
                                          executor->plan_state_->init_agg_vals_,
                                          getVarlenOutputInfo());
@@ -415,7 +413,10 @@ QueryMemoryInitializer::QueryMemoryInitializer(
     const Executor* executor)
     : num_rows_(num_rows)
     , row_set_mem_owner_(row_set_mem_owner)
-    , init_agg_vals_(init_agg_val_vec(exe_unit.target_exprs, {}, query_mem_desc))
+    , init_agg_vals_(init_agg_val_vec(exe_unit.target_exprs,
+                                      {},
+                                      query_mem_desc,
+                                      executor->getConfig().exec.group_by.bigint_count))
     , num_buffers_(1)
     , varlen_output_buffer_(0)
     , varlen_output_buffer_host_ptr_(nullptr)
@@ -467,21 +468,22 @@ QueryMemoryInitializer::QueryMemoryInitializer(
       get_col_frag_offsets(exe_unit.target_exprs, frag_offsets);
   const auto column_frag_sizes =
       get_consistent_frags_sizes(exe_unit.target_exprs, consistent_frag_sizes);
-  result_sets_.emplace_back(
-      new ResultSet(target_exprs_to_infos(exe_unit.target_exprs, query_mem_desc),
-                    /*col_lazy_fetch_info=*/{},
-                    col_buffers,
-                    column_frag_offsets,
-                    column_frag_sizes,
-                    device_type,
-                    device_id,
-                    ResultSet::fixupQueryMemoryDescriptor(query_mem_desc),
-                    row_set_mem_owner_,
-                    executor->getDataMgr(),
-                    executor->getBufferProvider(),
-                    executor->getDatabaseId(),
-                    executor->blockSize(),
-                    executor->gridSize()));
+  result_sets_.emplace_back(new ResultSet(
+      target_exprs_to_infos(exe_unit.target_exprs,
+                            query_mem_desc,
+                            executor->getConfig().exec.group_by.bigint_count),
+      /*col_lazy_fetch_info=*/{},
+      col_buffers,
+      column_frag_offsets,
+      column_frag_sizes,
+      device_type,
+      device_id,
+      ResultSet::fixupQueryMemoryDescriptor(query_mem_desc),
+      row_set_mem_owner_,
+      executor->getDataMgr(),
+      executor->getBufferProvider(),
+      executor->blockSize(),
+      executor->gridSize()));
   result_sets_.back()->allocateStorage(reinterpret_cast<int8_t*>(group_by_buffer),
                                        init_agg_vals_);
 }
@@ -530,10 +532,6 @@ void QueryMemoryInitializer::initGroupByBuffer(
 
 bool QueryMemoryInitializer::useVectorRowGroupsInit(const size_t row_size,
                                                     const size_t entries) const {
-  if (!g_optimize_row_initialization) {
-    return false;
-  }
-
   // Assume 512-bit vector size. Don't bother if
   // the sample is too big.
   auto rows_per_sample = get_num_rows_for_vec_sample<64>(row_size);
@@ -562,6 +560,7 @@ void QueryMemoryInitializer::initRowGroups(const QueryMemoryDescriptor& query_me
   // we fallback to default implementation in that cases
   if (!std::any_of(agg_bitmap_size.begin(), agg_bitmap_size.end(), is_true) &&
       !std::any_of(quantile_params.begin(), quantile_params.end(), is_true) &&
+      executor->getConfig().rs.optimize_row_initialization &&
       useVectorRowGroupsInit(row_size, groups_buffer_entry_count * warp_size)) {
     auto rows_per_sample = get_num_rows_for_vec_sample<64>(row_size);
     auto sample_size = row_size * rows_per_sample;
@@ -649,7 +648,8 @@ void QueryMemoryInitializer::initColumnarGroups(
     const Executor* executor) {
   CHECK(groups_buffer);
   for (const auto target_expr : executor->plan_state_->target_exprs_) {
-    const auto agg_info = get_target_info(target_expr, g_bigint_count);
+    const auto agg_info =
+        get_target_info(target_expr, executor->getConfig().exec.group_by.bigint_count);
     CHECK(!is_distinct_target(agg_info));
   }
   const int32_t agg_col_count = query_mem_desc.getSlotCount();
@@ -800,7 +800,8 @@ std::vector<int64_t> QueryMemoryInitializer::allocateCountDistinctBuffers(
   for (size_t target_idx = 0; target_idx < executor->plan_state_->target_exprs_.size();
        ++target_idx) {
     const auto target_expr = executor->plan_state_->target_exprs_[target_idx];
-    const auto agg_info = get_target_info(target_expr, g_bigint_count);
+    const auto agg_info =
+        get_target_info(target_expr, executor->getConfig().exec.group_by.bigint_count);
     if (is_distinct_target(agg_info)) {
       CHECK(agg_info.is_agg &&
             (agg_info.agg_kind == kCOUNT || agg_info.agg_kind == kAPPROX_COUNT_DISTINCT));
@@ -941,6 +942,7 @@ GpuGroupByBuffers QueryMemoryInitializer::prepareTopNHeapsDevBuffer(
 GpuGroupByBuffers QueryMemoryInitializer::createAndInitializeGroupByBufferGpu(
     const RelAlgExecutionUnit& ra_exe_unit,
     const QueryMemoryDescriptor& query_mem_desc,
+    const Config& config,
     const CUdeviceptr init_agg_vals_dev_ptr,
     const int device_id,
     const ExecutorDispatchMode dispatch_mode,
@@ -959,6 +961,7 @@ GpuGroupByBuffers QueryMemoryInitializer::createAndInitializeGroupByBufferGpu(
   CHECK(!use_hash_table_desc_);
   auto dev_group_by_buffers =
       create_dev_group_by_buffers(device_allocator_,
+                                  config,
                                   group_by_buffers_,
                                   query_mem_desc,
                                   block_size_x,
@@ -1256,7 +1259,8 @@ void QueryMemoryInitializer::applyStreamingTopNOffsetGpu(
     const GpuGroupByBuffers& gpu_group_by_buffers,
     const RelAlgExecutionUnit& ra_exe_unit,
     const unsigned total_thread_count,
-    const int device_id) {
+    const int device_id,
+    bool bigint_count) {
 #ifdef HAVE_CUDA
   CHECK(!use_hash_table_desc_);
 
@@ -1269,7 +1273,8 @@ void QueryMemoryInitializer::applyStreamingTopNOffsetGpu(
       ra_exe_unit,
       query_mem_desc,
       total_thread_count,
-      device_id);
+      device_id,
+      bigint_count);
   CHECK_EQ(
       rows_copy.size(),
       static_cast<size_t>(query_mem_desc.getEntryCount() * query_mem_desc.getRowSize()));

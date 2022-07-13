@@ -89,21 +89,23 @@ The following `cmake`/`ccmake` options can enable/disable different features:
 
 # Building in conda environment
 
-`conda env create -f scripts/mapd-deps-conda-dev-env.yml --force`
-`conda activate omnisci-dev`
-`bash scripts/conda/build-install-all.sh`
+This is default and recommended way to build the project
+
+    conda env create -f scripts/mapd-deps-conda-dev-env.yml --force
+    conda activate omnisci-dev
+    bash scripts/conda/build-install-all.sh
 
 By default, tests are not included in the build. To build (only) tests use:
 
-`RUN_TESTS=1 bash scripts/conda/build-install-all.sh`
+    RUN_TESTS=1 bash scripts/conda/build-install-all.sh
 
 To build & run tests in a conda environment launch:
 
-`RUN_TESTS=2 bash scripts/conda/build-install-all.sh`
+    RUN_TESTS=2 bash scripts/conda/build-install-all.sh
 
 For debug build use (default is Release):
 
-`CMAKE_BUILD_TYPE=Debug bash scripts/conda/build-install-all.sh`
+    CMAKE_BUILD_TYPE=Debug bash scripts/conda/build-install-all.sh
 
 # Testing
 
@@ -230,12 +232,10 @@ OmniSciDB has the following dependencies:
 | [CMake](https://cmake.org/) | 3.16 | yes |
 | [LLVM](http://llvm.org/) | 9.0 | yes |
 | [GCC](http://gcc.gnu.org/) | 8.4.0 | no, if building with clang |
-| [Go](https://golang.org/) | 1.12 | yes |
 | [Boost](http://www.boost.org/) | 1.72.0 | yes |
 | [OpenJDK](http://openjdk.java.net/) | 1.7 | yes |
 | [CUDA](http://nvidia.com/cuda) | 11.0 | yes, if compiling with GPU support |
 | [gperftools](https://github.com/gperftools/gperftools) | | yes |
-| [gdal](http://gdal.org/) | 2.4.2 | yes |
 | [Arrow](https://arrow.apache.org/) | 3.0.0 | yes |
 
 ## CentOS 7
@@ -294,7 +294,7 @@ The [scripts/mapd-deps-centos.sh](scripts/mapd-deps-centos.sh) script is used to
 
 ## Ubuntu
 
-Most build dependencies required by OmniSciDB are available via APT. Certain dependencies such as Thrift, Blosc, and Folly must be built as they either do not exist in the default repositories or have outdated versions. A prebuilt package containing all these dependencies is provided for Ubuntu 18.04 (x86_64). The dependencies will be installed to `/usr/local/mapd-deps/` by default; see the Environment Variables section below for how to add these dependencies to your environment.
+Most build dependencies required by OmniSciDB are available via APT. Certain dependencies such as Thrift, and Folly must be built as they either do not exist in the default repositories or have outdated versions. A prebuilt package containing all these dependencies is provided for Ubuntu 18.04 (x86_64). The dependencies will be installed to `/usr/local/mapd-deps/` by default; see the Environment Variables section below for how to add these dependencies to your environment.
 
 ### Ubuntu 16.04
 

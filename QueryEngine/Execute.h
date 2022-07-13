@@ -44,6 +44,7 @@
 #include "QueryEngine/CartesianProduct.h"
 #include "QueryEngine/CgenState.h"
 #include "QueryEngine/CodeCache.h"
+#include "QueryEngine/CodeCacheAccessor.h"
 #include "QueryEngine/CompilationOptions.h"
 #include "QueryEngine/DateTimeUtils.h"
 #include "QueryEngine/Descriptors/QueryCompilationDescriptor.h"
@@ -66,6 +67,7 @@
 #include "DataMgr/Chunk/Chunk.h"
 #include "Logger/Logger.h"
 #include "SchemaMgr/SchemaProvider.h"
+#include "Shared/Config.h"
 #include "Shared/SystemParameters.h"
 #include "Shared/funcannotations.h"
 #include "Shared/mapd_shared_mutex.h"
@@ -264,9 +266,9 @@ class CompilationRetryNoCompaction : public std::runtime_error {
 };
 
 // Throwing QueryMustRunOnCpu allows us retry a query step on CPU if
-// g_allow_query_step_cpu_retry is true (on by default) by catching
+// allow_query_step_cpu_retry is true (on by default) by catching
 // the exception at the query step execution level in RelAlgExecutor,
-// or if g_allow_query_step_cpu_retry is false but g_allow_cpu_retry is true,
+// or if allow_query_step_cpu_retry is false but allow_cpu_retry is true,
 // by retrying the entire query on CPU (if both flags are false, we return an
 // error). This flag is thrown for the following broad categories of conditions:
 // 1) we have not implemented an operator on GPU and so cannot codegen for GPU
@@ -348,6 +350,7 @@ class Executor {
   Executor(const ExecutorId id,
            Data_Namespace::DataMgr* data_mgr,
            BufferProvider* buffer_provider,
+           ConfigPtr config,
            const size_t block_size_x,
            const size_t grid_size_x,
            const size_t max_gpu_slab_size,
@@ -355,14 +358,15 @@ class Executor {
            const std::string& debug_file);
 
   void clearCaches(bool runtime_only = false);
-  void reset(bool runtime_only = false);
 
-  static void resetAllExecutors(bool runtime_only = false) {
+  void reset(bool discard_runtime_modules_only = false);
+
+  static void resetAllExecutors(bool discard_runtime_modules_only = false) {
     mapd_unique_lock<mapd_shared_mutex> flush_lock(
         execute_mutex_);  // don't want native code to vanish while executing
     mapd_unique_lock<mapd_shared_mutex> lock(executors_cache_mutex_);
     for (auto& executor_item : Executor::executors_) {
-      executor_item.second->reset(runtime_only);
+      executor_item.second->reset(discard_runtime_modules_only);
     }
   }
 
@@ -370,6 +374,7 @@ class Executor {
       const ExecutorId id,
       Data_Namespace::DataMgr* data_mgr,
       BufferProvider* buffer_provider,
+      ConfigPtr config = nullptr,
       const std::string& debug_dir = "",
       const std::string& debug_file = "",
       const SystemParameters& system_parameters = SystemParameters());
@@ -478,9 +483,6 @@ class Executor {
   SchemaProviderPtr getSchemaProvider() const { return schema_provider_; }
   void setSchemaProvider(SchemaProviderPtr provider) { schema_provider_ = provider; }
 
-  int getDatabaseId() const { return db_id_; }
-  void setDatabaseId(int db_id) { db_id_ = db_id; }
-
   Data_Namespace::DataMgr* getDataMgr() const {
     CHECK(data_mgr_);
     return data_mgr_;
@@ -491,9 +493,13 @@ class Executor {
     return buffer_provider_;
   }
 
+  const Config& getConfig() const { return *config_; }
+
+  ConfigPtr getConfigPtr() const { return config_; }
+
   const std::shared_ptr<RowSetMemoryOwner> getRowSetMemoryOwner() const;
 
-  TableFragmentsInfo getTableInfo(const int table_id) const;
+  TableFragmentsInfo getTableInfo(const int db_id, const int table_id) const;
 
   const TableGeneration& getTableGeneration(const int table_id) const;
 
@@ -798,12 +804,6 @@ class Executor {
                                                    const bool is_group_by,
                                                    const bool float_argument_input);
 
-  template <typename CC>
-  static void addCodeToCache(const CodeCacheKey&,
-                             std::shared_ptr<CC>,
-                             llvm::Module*,
-                             CodeCache<CC>&);
-
  private:
   TemporaryTable resultsUnion(SharedKernelContext& shared_context,
                               const RelAlgExecutionUnit& ra_exe_unit,
@@ -1016,12 +1016,13 @@ class Executor {
       const std::unordered_set<InputColDescriptor>& col_descs);
   StringDictionaryGenerations computeStringDictionaryGenerations(
       const std::unordered_set<InputColDescriptor>& col_descs);
-  TableGenerations computeTableGenerations(std::unordered_set<int> phys_table_ids);
+  TableGenerations computeTableGenerations(
+      std::unordered_set<std::pair<int, int>> phys_table_ids);
 
  public:
   void setupCaching(DataProvider* data_provider,
                     const std::unordered_set<InputColDescriptor>& col_descs,
-                    const std::unordered_set<int>& phys_table_ids);
+                    const std::unordered_set<std::pair<int, int>>& phys_table_ids);
 
   void setColRangeCache(const AggregatedColRange& aggregated_col_range) {
     agg_col_range_cache_ = aggregated_col_range;
@@ -1106,18 +1107,15 @@ class Executor {
   PlanState* getPlanStatePtr() const { return plan_state_.get(); }
 
   llvm::LLVMContext& getContext() { return *context_.get(); }
-  void update_extension_modules(bool runtime_only = false);
+  void update_extension_modules(bool update_runtime_modules_only = false);
 
-  static void update_after_registration(bool runtime_only = false) {
+  static void update_after_registration(bool update_runtime_modules_only = false) {
     for (auto executor_item : Executor::executors_) {
-      executor_item.second->update_extension_modules(runtime_only);
+      executor_item.second->update_extension_modules(update_runtime_modules_only);
     }
   }
 
  private:
-  template <typename CC>
-  std::shared_ptr<CC> getCodeFromCache(const CodeCacheKey&, const CodeCache<CC>&);
-
   std::vector<int8_t> serializeLiterals(
       const std::unordered_map<int, CgenState::LiteralValues>& literals,
       const int device_id);
@@ -1133,12 +1131,14 @@ class Executor {
   const ExecutorId executor_id_;
   std::unique_ptr<llvm::LLVMContext> context_;
 
+ public:
   // CgenStateManager uses RAII pattern to ensure that recursive code
   // generation (e.g. as in multi-step multi-subqueries) uses a new
   // CgenState instance for each recursion depth while restoring the
   // old CgenState instances when returning from recursion.
   class CgenStateManager {
    public:
+    CgenStateManager(Executor& executor);
     CgenStateManager(Executor& executor,
                      const bool allow_lazy_fetch,
                      const std::vector<InputTableInfo>& query_infos,
@@ -1147,9 +1147,13 @@ class Executor {
 
    private:
     Executor& executor_;
+    std::chrono::steady_clock::time_point lock_queue_clock_;
+    std::lock_guard<std::mutex> lock_;
     std::unique_ptr<CgenState> cgen_state_;
   };
 
+ private:
+  ConfigPtr config_;
   std::unique_ptr<CgenState> cgen_state_;
 
   const std::unique_ptr<llvm::Module>& get_extension_module(ExtModuleKinds kind) const {
@@ -1196,18 +1200,13 @@ class Executor {
 
   mutable std::unique_ptr<llvm::TargetMachine> nvptx_target_machine_;
 
- public:  // TODO: implement API for accessing these code caches
-  CodeCache<CpuCompilationContext> s_stubs_cache;
-  CodeCache<CpuCompilationContext> s_code_cache;
+ public:
+  static std::unique_ptr<CodeCacheAccessor<CpuCompilationContext>> s_stubs_accessor;
+  static std::unique_ptr<CodeCacheAccessor<CpuCompilationContext>> s_code_accessor;
+  static std::unique_ptr<CodeCacheAccessor<CpuCompilationContext>> cpu_code_accessor;
+  static std::unique_ptr<CodeCacheAccessor<GpuCompilationContext>> gpu_code_accessor;
 
  private:
-  CodeCache<CpuCompilationContext> cpu_code_cache_;
-  CodeCache<GpuCompilationContext> gpu_code_cache_;
-
-  static const size_t baseline_threshold{
-      1000000};  // if a perfect hash needs more entries, use baseline
-  static const size_t code_cache_size{1000};
-
   const unsigned block_size_x_;
   const unsigned grid_size_x_;
   const size_t max_gpu_slab_size_;
@@ -1215,7 +1214,6 @@ class Executor {
   const std::string debug_file_;
 
   SchemaProviderPtr schema_provider_;
-  int db_id_ = -1;
   Data_Namespace::DataMgr* data_mgr_;
   BufferProvider* buffer_provider_;
   const TemporaryTables* temporary_tables_;
@@ -1263,7 +1261,8 @@ class Executor {
 
   static mapd_shared_mutex executors_cache_mutex_;
 
-  static QueryPlanDagCache query_plan_dag_cache_;
+  static std::unique_ptr<QueryPlanDagCache> query_plan_dag_cache_;
+  static std::once_flag first_init_flag_;
   const QueryPlanHash INVALID_QUERY_PLAN_HASH{std::hash<std::string>{}(EMPTY_QUERY_PLAN)};
   static mapd_shared_mutex recycler_mutex_;
   static std::unordered_map<std::string, size_t> cardinality_cache_;
@@ -1311,8 +1310,6 @@ class Executor {
   friend class ExecutionKernel;
   friend class KernelSubtask;
   friend class HashJoin;  // cgen_state_
-  friend class OverlapsJoinHashTable;
-  friend class RangeJoinHashTable;
   friend class GroupByAndAggregate;
   friend class QueryCompilationDescriptor;
   friend class QueryMemoryDescriptor;
@@ -1363,7 +1360,8 @@ inline bool is_constructed_point(const Analyzer::Expr* expr) {
 }
 
 bool is_trivial_loop_join(const std::vector<InputTableInfo>& query_infos,
-                          const RelAlgExecutionUnit& ra_exe_unit);
+                          const RelAlgExecutionUnit& ra_exe_unit,
+                          unsigned trivial_loop_join_threshold);
 
 std::unordered_set<int> get_available_gpus(const Data_Namespace::DataMgr* data_mgr);
 

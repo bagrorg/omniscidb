@@ -25,8 +25,6 @@
 #include "Shared/likely.h"
 #include "Shared/sqltypes.h"
 
-extern bool g_enable_non_kernel_time_query_interrupt;
-extern size_t g_enable_parallel_linearization;
 namespace {
 
 inline const ColumnarResults* columnarize_result(
@@ -180,7 +178,7 @@ JoinColumn ColumnFetcher::makeJoinColumn(
   size_t num_elems = 0;
   size_t num_chunks = 0;
   for (auto& frag : fragments) {
-    if (g_enable_non_kernel_time_query_interrupt &&
+    if (executor->getConfig().exec.interrupt.enable_non_kernel_time_query_interrupt &&
         executor->checkNonKernelTimeInterrupted()) {
       throw QueryExecutionError(Executor::ERR_INTERRUPTED);
     }
@@ -296,6 +294,7 @@ const int8_t* ColumnFetcher::getAllTableColumnFragments(
     const int device_id,
     DeviceAllocator* device_allocator,
     const size_t thread_idx) const {
+  int db_id = col_info->db_id;
   int table_id = col_info->table_id;
   int col_id = col_info->column_id;
   const auto fragments_it = all_tables_fragments.find(table_id);
@@ -304,14 +303,15 @@ const int8_t* ColumnFetcher::getAllTableColumnFragments(
   const auto frag_count = fragments->size();
   std::vector<std::unique_ptr<ColumnarResults>> column_frags;
   const ColumnarResults* table_column = nullptr;
-  const InputDescriptor table_desc(table_id, int(0));
+  const InputDescriptor table_desc(db_id, table_id, int(0));
   CHECK(table_desc.getSourceType() == InputSourceType::TABLE);
   {
     std::lock_guard<std::mutex> columnar_conversion_guard(columnar_fetch_mutex_);
     auto column_it = columnarized_scan_table_cache_.find({table_id, col_id});
     if (column_it == columnarized_scan_table_cache_.end()) {
       for (size_t frag_id = 0; frag_id < frag_count; ++frag_id) {
-        if (g_enable_non_kernel_time_query_interrupt &&
+        if (executor_->getConfig()
+                .exec.interrupt.enable_non_kernel_time_query_interrupt &&
             executor_->checkNonKernelTimeInterrupted()) {
           throw QueryExecutionError(Executor::ERR_INTERRUPTED);
         }
@@ -381,13 +381,14 @@ const int8_t* ColumnFetcher::linearizeColumnFragments(
     DeviceAllocator* device_allocator,
     const size_t thread_idx) const {
   auto timer = DEBUG_TIMER(__func__);
+  int db_id = col_info->db_id;
   int table_id = col_info->table_id;
   int col_id = col_info->column_id;
   const auto fragments_it = all_tables_fragments.find(table_id);
   CHECK(fragments_it != all_tables_fragments.end());
   const auto fragments = fragments_it->second;
   const auto frag_count = fragments->size();
-  InputDescriptor table_desc(table_id, 0);
+  InputDescriptor table_desc(db_id, table_id, 0);
   CHECK(table_desc.getSourceType() == InputSourceType::TABLE);
   CHECK_GT(table_id, 0);
   bool is_varlen_chunk = col_info->type.is_varlen() && !col_info->type.is_fixlen_array();
@@ -706,7 +707,7 @@ MergedChunk ColumnFetcher::linearizeVarLenArrayColFrags(
 
   for (; chunk_holder_it != local_chunk_holder.end();
        chunk_holder_it++, chunk_iter_holder_it++, chunk_num_tuple_it++) {
-    if (g_enable_non_kernel_time_query_interrupt &&
+    if (executor_->getConfig().exec.interrupt.enable_non_kernel_time_query_interrupt &&
         executor_->checkNonKernelTimeInterrupted()) {
       throw QueryExecutionError(Executor::ERR_INTERRUPTED);
     }
@@ -787,7 +788,8 @@ MergedChunk ColumnFetcher::linearizeVarLenArrayColFrags(
             }
           }
         };
-        if (cur_chunk_num_tuples > g_enable_parallel_linearization) {
+        if (cur_chunk_num_tuples >
+            executor_->getConfig().exec.parallel_linearization_threshold) {
           is_parallel_modification = true;
           for (auto interval :
                makeIntervals(size_t(0), cur_chunk_num_tuples, worker_count)) {
@@ -964,7 +966,8 @@ MergedChunk ColumnFetcher::linearizeFixedLenArrayColFrags(
     auto chunk_iter_holder_it = local_chunk_iter_holder.begin();
     for (; chunk_holder_it != local_chunk_holder.end();
          chunk_holder_it++, chunk_iter_holder_it++) {
-      if (g_enable_non_kernel_time_query_interrupt && check_interrupt()) {
+      if (executor_->getConfig().exec.interrupt.enable_non_kernel_time_query_interrupt &&
+          check_interrupt()) {
         throw QueryExecutionError(Executor::ERR_INTERRUPTED);
       }
       auto target_chunk = chunk_holder_it->get();

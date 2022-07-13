@@ -85,11 +85,7 @@ struct ColumnsForDevice {
   const std::vector<JoinColumn> join_columns;
   const std::vector<JoinColumnTypeInfo> join_column_types;
   const std::vector<std::shared_ptr<Chunk_NS::Chunk>> chunks_owner;
-  std::vector<JoinBucketInfo> join_buckets;
   const std::vector<std::shared_ptr<void>> malloc_owner;
-
-  void setBucketInfo(const std::vector<double>& bucket_sizes_for_dimension,
-                     const std::vector<InnerOuter> inner_outer_pairs);
 };
 
 struct HashJoinMatchingSet {
@@ -192,6 +188,7 @@ class HashJoin {
 
   //! Make hash table from named tables and columns (such as for testing).
   static std::shared_ptr<HashJoin> getSyntheticInstance(
+      int db_id,
       std::string_view table1,
       std::string_view column1,
       std::string_view table2,
@@ -316,7 +313,8 @@ std::ostream& operator<<(std::ostream& os, const DecodedJoinHashBufferEntry& e);
 
 std::ostream& operator<<(std::ostream& os, const DecodedJoinHashBufferSet& s);
 
-std::shared_ptr<Analyzer::ColumnVar> getSyntheticColumnVar(std::string_view table,
+std::shared_ptr<Analyzer::ColumnVar> getSyntheticColumnVar(int db_id,
+                                                           std::string_view table,
                                                            std::string_view column,
                                                            int rte_idx,
                                                            Executor* executor);

@@ -30,7 +30,6 @@
 #include "TargetExprBuilder.h"
 
 #include "../CudaMgr/CudaMgr.h"
-#include "../Shared/Globals.h"
 #include "../Shared/checked_alloc.h"
 #include "../Shared/funcannotations.h"
 #include "../ThirdParty/robin_hood.h"
@@ -50,11 +49,6 @@
 #include <string_view>
 #include <thread>
 
-bool g_bigint_count{false};
-int g_hll_precision_bits{11};
-size_t g_watchdog_baseline_max_groups{120000000};
-
-extern bool g_enable_watchdog;
 namespace {
 
 int32_t get_agg_count(const std::vector<Analyzer::Expr*>& target_exprs) {
@@ -88,9 +82,9 @@ bool expr_is_rowid(const Analyzer::Expr* expr) {
   return col->is_virtual();
 }
 
-bool has_count_distinct(const RelAlgExecutionUnit& ra_exe_unit) {
+bool has_count_distinct(const RelAlgExecutionUnit& ra_exe_unit, bool bigint_count) {
   for (const auto& target_expr : ra_exe_unit.target_exprs) {
-    const auto agg_info = get_target_info(target_expr, g_bigint_count);
+    const auto agg_info = get_target_info(target_expr, bigint_count);
     if (agg_info.is_agg && is_distinct_target(agg_info)) {
       return true;
     }
@@ -171,11 +165,11 @@ ColRangeInfo GroupByAndAggregate::getColRangeInfo() {
   // Technically, this only applies to APPROX_COUNT_DISTINCT, but in practice we
   // can expect this to be true anyway for grouped queries since the precise version
   // uses significantly more memory.
-  const int64_t baseline_threshold =
-      has_count_distinct(ra_exe_unit_)
-          ? (device_type_ == ExecutorDeviceType::GPU ? (Executor::baseline_threshold / 4)
-                                                     : Executor::baseline_threshold)
-          : Executor::baseline_threshold;
+  int64_t baseline_threshold = config_.exec.group_by.baseline_threshold;
+  if (has_count_distinct(ra_exe_unit_, config_.exec.group_by.bigint_count) &&
+      device_type_ == ExecutorDeviceType::GPU) {
+    baseline_threshold = baseline_threshold / 4;
+  }
   if (ra_exe_unit_.groupby_exprs.size() != 1) {
     try {
       checked_int64_t cardinality{1};
@@ -225,7 +219,7 @@ ColRangeInfo GroupByAndAggregate::getColRangeInfo() {
   const int64_t col_count =
       ra_exe_unit_.groupby_exprs.size() + ra_exe_unit_.target_exprs.size();
   int64_t max_entry_count = MAX_BUFFER_SIZE / (col_count * sizeof(int64_t));
-  if (has_count_distinct(ra_exe_unit_)) {
+  if (has_count_distinct(ra_exe_unit_, config_.exec.group_by.bigint_count)) {
     max_entry_count = std::min(max_entry_count, baseline_threshold);
   }
   const auto& groupby_expr_ti = ra_exe_unit_.groupby_exprs.front()->get_type_info();
@@ -248,7 +242,7 @@ ColRangeInfo GroupByAndAggregate::getColRangeInfo() {
       if (!ra_exe_unit_.sort_info.order_entries.empty()) {
         // TODO(adb): allow some sorts to pass through this block by centralizing sort
         // algorithm decision making
-        if (has_count_distinct(ra_exe_unit_) &&
+        if (has_count_distinct(ra_exe_unit_, config_.exec.group_by.bigint_count) &&
             is_column_range_too_big_for_perfect_hash(col_range_info, max_entry_count)) {
           // always use baseline hash for column range too big for perfect hash with count
           // distinct descriptors. We will need 8GB of CPU memory minimum for the perfect
@@ -313,6 +307,7 @@ GroupByAndAggregate::GroupByAndAggregate(
     std::shared_ptr<RowSetMemoryOwner> row_set_mem_owner,
     const std::optional<int64_t>& group_cardinality_estimation)
     : executor_(executor)
+    , config_(executor->getConfig())
     , ra_exe_unit_(ra_exe_unit)
     , query_infos_(query_infos)
     , row_set_mem_owner_(row_set_mem_owner)
@@ -393,7 +388,8 @@ KeylessInfo get_keyless_info(const RelAlgExecutionUnit& ra_exe_unit,
   int32_t num_agg_expr{0};
   int32_t index{0};
   for (const auto target_expr : ra_exe_unit.target_exprs) {
-    const auto agg_info = get_target_info(target_expr, g_bigint_count);
+    const auto agg_info =
+        get_target_info(target_expr, executor->getConfig().exec.group_by.bigint_count);
     const auto chosen_type = get_compact_type(agg_info);
     if (agg_info.is_agg) {
       num_agg_expr++;
@@ -555,7 +551,8 @@ CountDistinctDescriptors init_count_distinct_descriptors(
     QueryDescriptionType group_by_hash_type) {
   CountDistinctDescriptors count_distinct_descriptors;
   for (const auto target_expr : ra_exe_unit.target_exprs) {
-    auto agg_info = get_target_info(target_expr, g_bigint_count);
+    auto agg_info =
+        get_target_info(target_expr, executor->getConfig().exec.group_by.bigint_count);
     if (is_distinct_target(agg_info)) {
       CHECK(agg_info.is_agg);
       CHECK(agg_info.agg_kind == kCOUNT || agg_info.agg_kind == kAPPROX_COUNT_DISTINCT);
@@ -582,7 +579,7 @@ CountDistinctDescriptors init_count_distinct_descriptors(
           CHECK_GE(error_rate->get_constval().intval, 1);
           bitmap_sz_bits = hll_size_for_rate(error_rate->get_constval().smallintval);
         } else {
-          bitmap_sz_bits = g_hll_precision_bits;
+          bitmap_sz_bits = executor->getConfig().exec.group_by.hll_precision_bits;
         }
       }
       if (arg_range_info.isEmpty()) {
@@ -623,7 +620,7 @@ CountDistinctDescriptors init_count_distinct_descriptors(
         count_distinct_impl_type = CountDistinctImplType::Bitmap;
       }
 
-      if (g_enable_watchdog && !(arg_range_info.isEmpty()) &&
+      if (executor->getConfig().exec.watchdog.enable && !(arg_range_info.isEmpty()) &&
           count_distinct_impl_type == CountDistinctImplType::HashSet) {
         throw WatchdogException("Cannot use a fast path for COUNT distinct");
       }
@@ -725,9 +722,9 @@ std::unique_ptr<QueryMemoryDescriptor> GroupByAndAggregate::initQueryMemoryDescr
           ? KeylessInfo{false, -1}
           : get_keyless_info(ra_exe_unit_, query_infos_, is_group_by, executor_);
 
-  if (g_enable_watchdog &&
+  if (config_.exec.watchdog.enable &&
       ((col_range_info.hash_type_ == QueryDescriptionType::GroupByBaselineHash &&
-        max_groups_buffer_entry_count > g_watchdog_baseline_max_groups) ||
+        max_groups_buffer_entry_count > config_.exec.watchdog.baseline_max_groups) ||
        (col_range_info.hash_type_ == QueryDescriptionType::GroupByPerfectHash &&
         ra_exe_unit_.groupby_exprs.size() == 1 &&
         (col_range_info.max - col_range_info.min) /
@@ -1005,8 +1002,8 @@ llvm::Value* GroupByAndAggregate::codegenOutputSlot(
       }
       fname += order_entry_lv->getType()->isDoubleTy() ? "_double" : "_float";
     }
-    const auto key_slot_idx =
-        get_heap_key_slot_index(ra_exe_unit_.target_exprs, target_idx);
+    const auto key_slot_idx = get_heap_key_slot_index(
+        ra_exe_unit_.target_exprs, target_idx, config_.exec.group_by.bigint_count);
     return emitCall(
         fname,
         {groups_buffer,
@@ -1674,7 +1671,7 @@ void GroupByAndAggregate::codegenCountDistinct(
     const QueryMemoryDescriptor& query_mem_desc,
     const ExecutorDeviceType device_type) {
   AUTOMATIC_IR_METADATA(executor_->cgen_state_.get());
-  const auto agg_info = get_target_info(target_expr, g_bigint_count);
+  const auto agg_info = get_target_info(target_expr, config_.exec.group_by.bigint_count);
   const auto& arg_ti =
       static_cast<const Analyzer::AggExpr*>(target_expr)->get_arg()->get_type_info();
   if (arg_ti.is_fp()) {
@@ -1765,7 +1762,8 @@ void GroupByAndAggregate::codegenApproxQuantile(
     irb.SetInsertPoint(calc);
   }
   if (!arg_ti.is_fp()) {
-    auto const agg_info = get_target_info(target_expr, g_bigint_count);
+    auto const agg_info =
+        get_target_info(target_expr, config_.exec.group_by.bigint_count);
     agg_args.back() = executor_->castToFP(agg_args.back(), arg_ti, agg_info.sql_type);
   }
   cs->emitExternalCall(

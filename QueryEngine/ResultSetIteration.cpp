@@ -787,7 +787,6 @@ TargetValue build_array_target_value(
 TargetValue build_string_array_target_value(
     const int32_t* buff,
     const size_t buff_sz,
-    const int db_id,
     const int dict_id,
     const bool translate_strings,
     std::shared_ptr<RowSetMemoryOwner> row_set_mem_owner,
@@ -808,7 +807,7 @@ TargetValue build_string_array_target_value(
         } else {
           values.emplace_back(NullableString(
               row_set_mem_owner
-                  ->getOrAddStringDictProxy(db_id, dict_id, /*with_generation=*/false)
+                  ->getOrAddStringDictProxy(dict_id, /*with_generation=*/false)
                   ->getString(string_id)));
         }
       }
@@ -826,14 +825,12 @@ TargetValue build_array_target_value(const SQLTypeInfo& array_ti,
                                      const size_t buff_sz,
                                      const bool translate_strings,
                                      std::shared_ptr<RowSetMemoryOwner> row_set_mem_owner,
-                                     const Data_Namespace::DataMgr* data_mgr,
-                                     const int db_id) {
+                                     const Data_Namespace::DataMgr* data_mgr) {
   CHECK(array_ti.is_array());
   const auto& elem_ti = array_ti.get_elem_type();
   if (elem_ti.is_string()) {
     return build_string_array_target_value(reinterpret_cast<const int32_t*>(buff),
                                            buff_sz,
-                                           db_id,
                                            elem_ti.get_comp_param(),
                                            translate_strings,
                                            row_set_mem_owner,
@@ -869,30 +866,6 @@ inline std::vector<std::pair<const int8_t*, const int64_t>> make_vals_vector(
     const Tuple& tuple) {
   return std::vector<std::pair<const int8_t*, const int64_t>>{
       std::make_pair(std::get<2 * indices>(tuple), std::get<2 * indices + 1>(tuple))...};
-}
-
-inline std::unique_ptr<ArrayDatum> lazy_fetch_chunk(const int8_t* ptr,
-                                                    const int64_t varlen_ptr) {
-  auto ad = std::make_unique<ArrayDatum>();
-  bool is_end;
-  ChunkIter_get_nth(reinterpret_cast<ChunkIter*>(const_cast<int8_t*>(ptr)),
-                    varlen_ptr,
-                    ad.get(),
-                    &is_end);
-  CHECK(!is_end);
-  return ad;
-}
-
-inline std::unique_ptr<ArrayDatum> fetch_data_from_gpu(int64_t varlen_ptr,
-                                                       const int64_t length,
-                                                       BufferProvider* buffer_provider,
-                                                       const int device_id) {
-  auto cpu_buf =
-      std::shared_ptr<int8_t>(new int8_t[length], std::default_delete<int8_t[]>());
-  buffer_provider->copyFromDevice(
-      cpu_buf.get(), reinterpret_cast<const int8_t*>(varlen_ptr), length, device_id);
-  // Just fetching the data from gpu
-  return std::make_unique<ArrayDatum>(length, cpu_buf, false);
 }
 
 template <typename T>
@@ -1171,8 +1144,7 @@ TargetValue ResultSet::makeVarlenTargetValue(const int8_t* ptr1,
           varlen_buffer[varlen_ptr].size(),
           translate_strings,
           row_set_mem_owner_,
-          data_mgr_,
-          db_id_for_dict_);
+          data_mgr_);
     } else {
       CHECK(false);
     }
@@ -1223,8 +1195,7 @@ TargetValue ResultSet::makeVarlenTargetValue(const int8_t* ptr1,
                                         ad.length,
                                         translate_strings,
                                         row_set_mem_owner_,
-                                        data_mgr_,
-                                        db_id_for_dict_);
+                                        data_mgr_);
       }
     }
   }
@@ -1255,8 +1226,7 @@ TargetValue ResultSet::makeVarlenTargetValue(const int8_t* ptr1,
                                     length,
                                     translate_strings,
                                     row_set_mem_owner_,
-                                    data_mgr_,
-                                    db_id_for_dict_);
+                                    data_mgr_);
   }
   return std::string(reinterpret_cast<char*>(varlen_ptr), length);
 }
@@ -1367,7 +1337,6 @@ TargetValue ResultSet::makeTargetValue(const int8_t* ptr,
       } else {
         sdp = data_mgr_
                   ? row_set_mem_owner_->getOrAddStringDictProxy(
-                        db_id_for_dict_,
                         chosen_type.get_comp_param(),
                         /*with_generation=*/false)
                   : row_set_mem_owner_->getStringDictProxy(

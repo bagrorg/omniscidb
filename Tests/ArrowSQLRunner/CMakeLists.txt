@@ -1,6 +1,6 @@
 set(arrow_query_runner_files
     ArrowSQLRunner.cpp
-    SchemaJson.cpp
+    RelAlgCache.cpp
     SQLiteComparator.cpp
 )
 

@@ -26,7 +26,6 @@
 #include "QueryEngine/ExternalExecutor.h"
 #include "QueryEngine/SerializeToSql.h"
 
-extern size_t g_cpu_sub_task_size;
 namespace {
 
 bool needs_skip_result(const ResultSetPtr& res) {
@@ -176,11 +175,11 @@ void ExecutionKernel::runImpl(Executor* executor,
   auto chunk_iterators_ptr = std::make_shared<std::list<ChunkIter>>();
   std::list<std::shared_ptr<Chunk_NS::Chunk>> chunks;
   std::unique_ptr<std::lock_guard<std::mutex>> gpu_lock;
-  std::unique_ptr<CudaAllocator> device_allocator;
+  std::unique_ptr<GpuAllocator> device_allocator;
   if (chosen_device_type == ExecutorDeviceType::GPU) {
     gpu_lock.reset(
         new std::lock_guard<std::mutex>(executor->gpu_exec_mutex_[chosen_device_id]));
-    device_allocator = std::make_unique<CudaAllocator>(buffer_provider, chosen_device_id);
+    device_allocator = std::make_unique<GpuAllocator>(buffer_provider, chosen_device_id);
   }
   std::shared_ptr<FetchResult> fetch_result(new FetchResult);
   try {
@@ -248,8 +247,7 @@ void ExecutionKernel::runImpl(Executor* executor,
     if (ra_exe_unit_.input_descs.size() > 1) {
       throw std::runtime_error("Joins not supported through external execution");
     }
-    const auto query = serialize_to_sql(
-        &ra_exe_unit_, executor->getDatabaseId(), executor->getSchemaProvider());
+    const auto query = serialize_to_sql(&ra_exe_unit_, executor->getSchemaProvider());
     GroupByAndAggregate group_by_and_aggregate(executor,
                                                ExecutorDeviceType::CPU,
                                                ra_exe_unit_,
@@ -264,7 +262,9 @@ void ExecutionKernel::runImpl(Executor* executor,
         executor->plan_state_.get(),
         ExternalQueryOutputSpec{
             *query_mem_desc,
-            target_exprs_to_infos(ra_exe_unit_.target_exprs, *query_mem_desc),
+            target_exprs_to_infos(ra_exe_unit_.target_exprs,
+                                  *query_mem_desc,
+                                  executor->getConfig().exec.group_by.bigint_count),
             executor});
     shared_context.addDeviceResults(
         std::move(device_results_), outer_table_id, outer_tab_frag_ids);
@@ -332,7 +332,7 @@ void ExecutionKernel::runImpl(Executor* executor,
   // result sets. Can we simply do it once and holdin an outer structure?
   if (can_run_subkernels) {
     size_t total_rows = fetch_result->num_rows[0][0];
-    size_t sub_size = g_cpu_sub_task_size;
+    size_t sub_size = executor->getConfig().exec.sub_tasks.sub_task_size;
     for (size_t sub_start = start_rowid; sub_start < total_rows; sub_start += sub_size) {
       sub_size = (sub_start + sub_size > total_rows) ? total_rows - sub_start : sub_size;
       auto subtask = std::make_shared<KernelSubtask>(*this,

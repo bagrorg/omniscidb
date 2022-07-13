@@ -52,17 +52,21 @@ class ArrowStorage : public SimpleSchemaProvider, public AbstractDataProvider {
   };
 
   ArrowStorage(int schema_id, const std::string& schema_name, int db_id)
-      : SimpleSchemaProvider(schema_id, schema_name), db_id_(db_id) {}
+      : SimpleSchemaProvider(schema_id, schema_name)
+      , db_id_(db_id)
+      , schema_id_(getSchemaId(db_id)) {}
 
   void fetchBuffer(const ChunkKey& key,
                    Data_Namespace::AbstractBuffer* dest,
                    const size_t num_bytes = 0) override;
 
+  std::unique_ptr<Data_Namespace::AbstractDataToken> getZeroCopyBufferMemory(
+      const ChunkKey& key,
+      size_t num_bytes) override;
+
   TableFragmentsInfo getTableMetadata(int db_id, int table_id) const override;
 
-  const DictDescriptor* getDictMetadata(int db_id,
-                                        int dict_id,
-                                        bool load_dict = true) override;
+  const DictDescriptor* getDictMetadata(int dict_id, bool load_dict = true) override;
 
   TableInfoPtr createTable(const std::string& table_name,
                            const std::vector<ColumnDescription>& columns,
@@ -136,6 +140,22 @@ class ArrowStorage : public SimpleSchemaProvider, public AbstractDataProvider {
     size_t row_count = 0;
   };
 
+  class ArrowChunkDataToken : public Data_Namespace::AbstractDataToken {
+   public:
+    ArrowChunkDataToken(std::shared_ptr<arrow::Array> chunk,
+                        const int8_t* ptr,
+                        size_t size)
+        : chunk_(std::move(chunk)), ptr_(ptr), size_(size) {}
+
+    const int8_t* getMemoryPtr() const override { return ptr_; }
+    size_t getSize() const override { return size_; }
+
+   private:
+    std::shared_ptr<arrow::Array> chunk_;
+    const int8_t* ptr_;
+    size_t size_;
+  };
+
   void checkNewTableParams(const std::string& table_name,
                            const std::vector<ColumnDescription>& columns,
                            const TableOptions& options) const;
@@ -185,10 +205,11 @@ class ArrowStorage : public SimpleSchemaProvider, public AbstractDataProvider {
                             size_t num_bytes) const;
 
   int db_id_;
+  int schema_id_;
   int next_table_id_ = 1;
   int next_dict_id_ = 1;
   std::unordered_map<int, std::unique_ptr<TableData>> tables_;
   std::unordered_map<int, std::unique_ptr<DictDescriptor>> dicts_;
-  mapd_shared_mutex data_mutex_;
-  mapd_shared_mutex schema_mutex_;
+  mutable mapd_shared_mutex data_mutex_;
+  mutable mapd_shared_mutex dict_mutex_;
 };

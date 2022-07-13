@@ -115,6 +115,8 @@ class BaselineJoinHashTable : public HashJoin {
     return hash_table_layout_cache_.get();
   }
 
+  static void initCaches(ConfigPtr config);
+
   virtual ~BaselineJoinHashTable() {}
 
  protected:
@@ -173,7 +175,6 @@ class BaselineJoinHashTable : public HashJoin {
   virtual int initHashTableForDevice(
       const std::vector<JoinColumn>& join_columns,
       const std::vector<JoinColumnTypeInfo>& join_column_types,
-      const std::vector<JoinBucketInfo>& join_buckets,
       const HashType layout,
       const Data_Namespace::MemoryLevel effective_memory_level,
       const size_t entry_count,
@@ -246,4 +247,5 @@ class BaselineJoinHashTable : public HashJoin {
 
   static std::unique_ptr<HashtableRecycler> hash_table_cache_;
   static std::unique_ptr<HashingSchemeRecycler> hash_table_layout_cache_;
+  static std::once_flag init_caches_flag_;
 };

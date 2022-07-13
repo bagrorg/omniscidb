@@ -12,7 +12,6 @@
  * limitations under the License.
  */
 
-#include "ArrowSQLRunner/SchemaJson.h"
 #include "Calcite/CalciteJNI.h"
 #include "DataMgr/DataMgrBufferProvider.h"
 #include "DataMgr/DataMgrDataProvider.h"
@@ -20,7 +19,6 @@
 #include "QueryEngine/CalciteAdapter.h"
 #include "QueryEngine/RelAlgExecutor.h"
 #include "SchemaMgr/SimpleSchemaProvider.h"
-#include "Shared/Globals.h"
 #include "Shared/scope.h"
 
 #include "ArrowTestHelpers.h"
@@ -37,6 +35,8 @@ constexpr int TEST1_TABLE_ID = 1;
 constexpr int TEST2_TABLE_ID = 2;
 constexpr int TEST_AGG_TABLE_ID = 3;
 constexpr int TEST_STREAMING_TABLE_ID = 4;
+
+static bool use_groupby_buffer_desc = false;
 
 using ArrowTestHelpers::compare_res_data;
 
@@ -158,23 +158,33 @@ class TestDataProvider : public TestHelpers::TestDataProvider {
 class NoCatalogSqlTest : public ::testing::Test {
  protected:
   static void SetUpTestSuite() {
+    config_ = std::make_shared<Config>();
+
     schema_provider_ = std::make_shared<TestSchemaProvider>();
 
     SystemParameters system_parameters;
-    data_mgr_ = std::make_shared<DataMgr>("", system_parameters, nullptr, false);
+    data_mgr_ = std::make_shared<DataMgr>(*config_,
+                                          system_parameters,
+                                          std::map<GpuMgrName, std::unique_ptr<GpuMgr>>(),
+                                          false);
 
     auto* ps_mgr = data_mgr_->getPersistentStorageMgr();
     ps_mgr->registerDataProvider(TEST_SCHEMA_ID,
                                  std::make_shared<TestDataProvider>(schema_provider_));
 
-    executor_ = Executor::getExecutor(
-        0, data_mgr_.get(), data_mgr_->getBufferProvider(), "", "", system_parameters);
+    executor_ = Executor::getExecutor(0,
+                                      data_mgr_.get(),
+                                      data_mgr_->getBufferProvider(),
+                                      config_,
+                                      "",
+                                      "",
+                                      system_parameters);
 
     init_calcite("");
   }
 
   static void init_calcite(const std::string& udf_filename) {
-    calcite_ = std::make_shared<CalciteJNI>(udf_filename);
+    calcite_ = std::make_shared<CalciteJNI>(schema_provider_, config_, udf_filename);
   }
 
   static void TearDownTestSuite() {
@@ -184,32 +194,28 @@ class NoCatalogSqlTest : public ::testing::Test {
     calcite_.reset();
   }
 
-  ExecutionResult runSqlQuery(const std::string& sql) {
-    auto schema_json = schema_to_json(schema_provider_);
-    const auto query_ra =
-        calcite_->process("admin", "test_db", pg_shim(sql), schema_json);
-    auto dag = std::make_unique<RelAlgDagBuilder>(query_ra, TEST_DB_ID, schema_provider_);
-    auto ra_executor = RelAlgExecutor(executor_.get(),
-                                      TEST_DB_ID,
-                                      schema_provider_,
-                                      data_mgr_->getDataProvider(),
-                                      std::move(dag));
+  ExecutionResult runRAQuery(const std::string& query_ra) {
+    auto dag = std::make_unique<RelAlgDagBuilder>(
+        query_ra, TEST_DB_ID, schema_provider_, config_);
+    auto ra_executor = RelAlgExecutor(
+        executor_.get(), schema_provider_, data_mgr_->getDataProvider(), std::move(dag));
 
     auto co = CompilationOptions::defaults(ExecutorDeviceType::CPU);
-    co.use_groupby_buffer_desc = g_use_groupby_buffer_desc;
+    co.use_groupby_buffer_desc = use_groupby_buffer_desc;
     return ra_executor.executeRelAlgQuery(co, ExecutionOptions(), false);
   }
 
+  ExecutionResult runSqlQuery(const std::string& sql) {
+    const auto query_ra = calcite_->process("test_db", pg_shim(sql));
+    return runRAQuery(query_ra);
+  }
+
   RelAlgExecutor getExecutor(const std::string& sql) {
-    auto schema_json = schema_to_json(schema_provider_);
-    const auto query_ra =
-        calcite_->process("admin", "test_db", pg_shim(sql), schema_json);
-    auto dag = std::make_unique<RelAlgDagBuilder>(query_ra, TEST_DB_ID, schema_provider_);
-    return RelAlgExecutor(executor_.get(),
-                          TEST_DB_ID,
-                          schema_provider_,
-                          data_mgr_->getDataProvider(),
-                          std::move(dag));
+    const auto query_ra = calcite_->process("test_db", pg_shim(sql));
+    auto dag = std::make_unique<RelAlgDagBuilder>(
+        query_ra, TEST_DB_ID, schema_provider_, config_);
+    return RelAlgExecutor(
+        executor_.get(), schema_provider_, data_mgr_->getDataProvider(), std::move(dag));
   }
 
   TestDataProvider& getDataProvider() {
@@ -219,12 +225,14 @@ class NoCatalogSqlTest : public ::testing::Test {
   }
 
  protected:
+  static ConfigPtr config_;
   static std::shared_ptr<DataMgr> data_mgr_;
   static SchemaProviderPtr schema_provider_;
   static std::shared_ptr<Executor> executor_;
   static std::shared_ptr<CalciteJNI> calcite_;
 };
 
+ConfigPtr NoCatalogSqlTest::config_;
 std::shared_ptr<DataMgr> NoCatalogSqlTest::data_mgr_;
 SchemaProviderPtr NoCatalogSqlTest::schema_provider_;
 std::shared_ptr<Executor> NoCatalogSqlTest::executor_;
@@ -277,12 +285,12 @@ TEST_F(NoCatalogSqlTest, StreamingAggregate) {
   data_provider.addTableColumn<int32_t>(TEST_STREAMING_TABLE_ID, 2, {3, 3, 3});
   data_provider.addTableColumn<int32_t>(TEST_STREAMING_TABLE_ID, 2, {3, 1, 4});
 
-  (void)ra_executor.runOnBatch({TEST_STREAMING_TABLE_ID, {0, 1}});
+  (void)ra_executor.runOnBatch({TEST_DB_ID, TEST_STREAMING_TABLE_ID, {0, 1}});
 
   data_provider.addTableColumn<int32_t>(TEST_STREAMING_TABLE_ID, 1, {4, 5, 6});
   data_provider.addTableColumn<int32_t>(TEST_STREAMING_TABLE_ID, 2, {7, 8, 9});
 
-  (void)ra_executor.runOnBatch({TEST_STREAMING_TABLE_ID, {2}});
+  (void)ra_executor.runOnBatch({TEST_DB_ID, TEST_STREAMING_TABLE_ID, {2}});
 
   auto rs = ra_executor.finishStreamingExecution();
 
@@ -309,18 +317,66 @@ TEST_F(NoCatalogSqlTest, StreamingFilter) {
   data_provider.addTableColumn<int32_t>(TEST_STREAMING_TABLE_ID, 2, {3, 30, 3});
   data_provider.addTableColumn<int32_t>(TEST_STREAMING_TABLE_ID, 2, {30, 1, 40});
 
-  ASSERT_EQ(ra_executor.runOnBatch({TEST_STREAMING_TABLE_ID, {0, 1}}), nullptr);
+  ASSERT_EQ(ra_executor.runOnBatch({TEST_DB_ID, TEST_STREAMING_TABLE_ID, {0, 1}}),
+            nullptr);
 
   data_provider.addTableColumn<int32_t>(TEST_STREAMING_TABLE_ID, 1, {40, 50, 60});
   data_provider.addTableColumn<int32_t>(TEST_STREAMING_TABLE_ID, 2, {70, 8, 90});
 
-  ASSERT_EQ(ra_executor.runOnBatch({TEST_STREAMING_TABLE_ID, {2}}), nullptr);
+  ASSERT_EQ(ra_executor.runOnBatch({TEST_DB_ID, TEST_STREAMING_TABLE_ID, {2}}), nullptr);
 
   auto rs = ra_executor.finishStreamingExecution();
 
   auto converter = std::make_unique<ArrowResultSetConverter>(rs, col_names, -1);
   auto at = converter->convertToArrowTable();
   ArrowTestHelpers::compare_arrow_table(at, std::vector<int32_t>{30, 30, 40, 70, 90});
+}
+
+TEST_F(NoCatalogSqlTest, MultipleCalciteMultipleThreads) {
+  constexpr int TEST_NTHREADS = 100;
+  std::vector<ExecutionResult> res;
+  std::vector<std::future<void>> threads;
+  res.resize(TEST_NTHREADS);
+  threads.resize(TEST_NTHREADS);
+  for (int i = 0; i < TEST_NTHREADS; ++i) {
+    threads[i] = std::async(std::launch::async, [this, i, &res]() {
+      auto calcite = std::make_unique<CalciteJNI>(schema_provider_, config_);
+      auto query_ra = calcite->process(
+          "test_db", "SELECT col_bi + " + std::to_string(i) + " FROM test1;");
+      res[i] = runRAQuery(query_ra);
+    });
+  }
+  for (int i = 0; i < TEST_NTHREADS; ++i) {
+    threads[i].wait();
+  }
+  for (int i = 0; i < TEST_NTHREADS; ++i) {
+    compare_res_data(res[i], std::vector<int64_t>({1 + i, 2 + i, 3 + i, 4 + i, 5 + i}));
+  }
+}
+
+TEST(CalciteReinitTest, SingleThread) {
+  auto schema_provider = std::make_shared<TestSchemaProvider>();
+  auto config = std::make_shared<Config>();
+  for (int i = 0; i < 10; ++i) {
+    auto calcite = std::make_shared<CalciteJNI>(schema_provider, config);
+    auto query_ra = calcite->process("test_db", "SELECT 1;");
+    CHECK(query_ra.find("LogicalValues") != std::string::npos);
+    CHECK(query_ra.find("LogicalProject") != std::string::npos);
+  }
+}
+
+TEST(CalciteReinitTest, MultipleThreads) {
+  auto schema_provider = std::make_shared<TestSchemaProvider>();
+  auto config = std::make_shared<Config>();
+  for (int i = 0; i < 10; ++i) {
+    auto f = std::async(std::launch::async, [schema_provider, config]() {
+      auto calcite = std::make_shared<CalciteJNI>(schema_provider, config);
+      auto query_ra = calcite->process("test_db", "SELECT 1;");
+      CHECK(query_ra.find("LogicalValues") != std::string::npos);
+      CHECK(query_ra.find("LogicalProject") != std::string::npos);
+    });
+    f.wait();
+  }
 }
 
 void parse_cli_args_to_globals(int argc, char* argv[]) {
@@ -344,7 +400,7 @@ void parse_cli_args_to_globals(int argc, char* argv[]) {
       std::exit(EXIT_SUCCESS);
     }
     po::notify(vm);
-    g_use_groupby_buffer_desc = vm["use-groupby-buffer-desc"].as<bool>();
+    use_groupby_buffer_desc = vm["use-groupby-buffer-desc"].as<bool>();
 
   } catch (boost::program_options::error& e) {
     std::cerr << "Usage Error: " << e.what() << std::endl;

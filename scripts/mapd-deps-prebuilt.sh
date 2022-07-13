@@ -103,7 +103,6 @@ if [ "$ID" == "ubuntu" ] ; then
       g++-9 \
       libboost-all-dev \
       libgoogle-glog-dev \
-      golang \
       libssl-dev \
       libevent-dev \
       default-jre \
@@ -173,12 +172,9 @@ LD_LIBRARY_PATH=\$PREFIX/lib64:\$LD_LIBRARY_PATH
 PATH=/usr/local/cuda/bin:\$PATH
 PATH=\$PREFIX/bin:\$PATH
 
-VULKAN_SDK=\$PREFIX
-VK_LAYER_PATH=\$PREFIX/etc/vulkan/explicit_layer.d
-
 CMAKE_PREFIX_PATH=\$PREFIX:\$CMAKE_PREFIX_PATH
 
-export LD_LIBRARY_PATH PATH VULKAN_SDK VK_LAYER_PATH CMAKE_PREFIX_PATH
+export LD_LIBRARY_PATH PATH CMAKE_PREFIX_PATH
 EOF
 
   PROFPATH=/etc/profile.d/xx-mapd-deps.sh

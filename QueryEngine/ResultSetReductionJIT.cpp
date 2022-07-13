@@ -33,9 +33,6 @@
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/raw_os_ostream.h>
 
-extern bool g_enable_dynamic_watchdog;
-extern bool g_enable_non_kernel_time_query_interrupt;
-
 namespace {
 
 // Error code to be returned when the watchdog timer triggers during the reduction.
@@ -497,8 +494,7 @@ extern "C" RUNTIME_EXPORT void get_group_value_reduction_rt(
 }
 
 extern "C" RUNTIME_EXPORT uint8_t check_watchdog_rt(const size_t sample_seed) {
-  if (UNLIKELY(g_enable_dynamic_watchdog && (sample_seed & 0x3F) == 0 &&
-               dynamic_watchdog())) {
+  if (UNLIKELY((sample_seed & 0x3F) == 0 && dynamic_watchdog())) {
     return true;
   }
   return false;
@@ -515,8 +511,10 @@ extern "C" uint8_t check_interrupt_rt(const size_t sample_seed) {
 ResultSetReductionJIT::ResultSetReductionJIT(const QueryMemoryDescriptor& query_mem_desc,
                                              const std::vector<TargetInfo>& targets,
                                              const std::vector<int64_t>& target_init_vals,
-                                             const size_t executor_id)
+                                             const size_t executor_id,
+                                             const Config& config)
     : executor_id_(executor_id)
+    , config_(config)
     , query_mem_desc_(query_mem_desc)
     , targets_(targets)
     , target_init_vals_(target_init_vals) {}
@@ -587,11 +585,10 @@ ReductionCode ResultSetReductionJIT::codegen() const {
   CHECK(executor) << executor_id_;
   CodeCacheKey key{cacheKey()};
   std::lock_guard<std::mutex> compilation_lock(executor->compilation_mutex_);
-  auto& s_code_cache = executor->s_code_cache;
-  const auto compilation_context = s_code_cache.get(key);
+  const auto compilation_context = Executor::s_code_accessor->get_or_wait(key);
   if (compilation_context) {
     reduction_code.func_ptr =
-        reinterpret_cast<ReductionCode::FuncPtr>(compilation_context->first->func());
+        reinterpret_cast<ReductionCode::FuncPtr>(compilation_context->get()->func());
     return reduction_code;
   }
   auto cgen_state_ = std::unique_ptr<CgenState>(new CgenState({}, false, executor.get()));
@@ -978,15 +975,17 @@ void generate_loop_body(For* for_loop,
                         Value* that_entry_count,
                         Value* this_qmd_handle,
                         Value* that_qmd_handle,
-                        Value* serialized_varlen_buffer) {
+                        Value* serialized_varlen_buffer,
+                        bool enable_dynamic_watchdog,
+                        bool enable_interrupt) {
   const auto that_entry_idx = for_loop->add<BinaryOperator>(
       BinaryOperator::BinaryOp::Add, for_loop->iter(), start_index, "that_entry_idx");
   const auto sample_seed =
       for_loop->add<Cast>(Cast::CastOp::SExt, that_entry_idx, Type::Int64, "");
-  if (g_enable_dynamic_watchdog || g_enable_non_kernel_time_query_interrupt) {
+  if (enable_dynamic_watchdog || enable_interrupt) {
     const auto checker_rt_name =
-        g_enable_dynamic_watchdog ? "check_watchdog_rt" : "check_interrupt_rt";
-    const auto error_code = g_enable_dynamic_watchdog ? WATCHDOG_ERROR : INTERRUPT_ERROR;
+        enable_dynamic_watchdog ? "check_watchdog_rt" : "check_interrupt_rt";
+    const auto error_code = enable_dynamic_watchdog ? WATCHDOG_ERROR : INTERRUPT_ERROR;
     const auto checker_triggered = for_loop->add<ExternalCall>(
         checker_rt_name, Type::Int8, std::vector<const Value*>{sample_seed}, "");
     const auto interrupt_triggered_bool =
@@ -1041,7 +1040,9 @@ void ResultSetReductionJIT::reduceLoop(const ReductionCode& reduction_code) cons
                      that_entry_count_arg,
                      this_qmd_handle_arg,
                      that_qmd_handle_arg,
-                     serialized_varlen_buffer_arg);
+                     serialized_varlen_buffer_arg,
+                     config_.exec.watchdog.enable_dynamic,
+                     config_.exec.interrupt.enable_non_kernel_time_query_interrupt);
   ir_reduce_loop->add<Ret>(ir_reduce_loop->addConstant<ConstantInt>(0, Type::Int32));
 }
 
@@ -1240,7 +1241,6 @@ void ResultSetReductionJIT::finalizeReductionCode(
       ExecutorDeviceType::CPU, false, ExecutorOptLevel::ReductionJIT, false};
   auto executor = Executor::getExecutorFromMap(executor_id_);
   CHECK(executor) << executor_id_;
-  auto& s_code_cache = executor->s_code_cache;
 #ifdef NDEBUG
   LOG(IR) << "Reduction Loop:\n"
           << serialize_llvm_object(reduction_code.llvm_reduce_loop);
@@ -1251,16 +1251,20 @@ void ResultSetReductionJIT::finalizeReductionCode(
 #else
   LOG(IR) << serialize_llvm_object(reduction_code.module);
 #endif
-
   auto ee = CodeGenerator::generateNativeCPUCode(
       reduction_code.llvm_reduce_loop, {reduction_code.llvm_reduce_loop}, co);
   auto cpu_compilation_context = std::make_shared<CpuCompilationContext>(std::move(ee));
   cpu_compilation_context->setFunctionPointer(reduction_code.llvm_reduce_loop);
   reduction_code.func_ptr =
       reinterpret_cast<ReductionCode::FuncPtr>(cpu_compilation_context->func());
+#ifdef ENABLE_ORCJIT
+  // At this point module should be materialized and deleted by ORC JIT.
+  reduction_code.module = nullptr;
+#else
   CHECK(reduction_code.llvm_reduce_loop->getParent() == reduction_code.module);
-  Executor::addCodeToCache(
-      key, cpu_compilation_context, reduction_code.module, s_code_cache);
+#endif
+
+  Executor::s_code_accessor->put(key, std::move(cpu_compilation_context));
 }
 
 namespace {

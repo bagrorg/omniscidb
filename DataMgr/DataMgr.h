@@ -27,12 +27,16 @@
 #include "AbstractBufferMgr.h"
 #include "BufferMgr/Buffer.h"
 #include "BufferMgr/BufferMgr.h"
+#include "CudaMgr/CudaMgr.h"
 #include "DataMgr/DataMgrBufferProvider.h"
 #include "DataMgr/DataMgrDataProvider.h"
+#include "GpuMgr.h"
+#include "L0Mgr/L0Mgr.h"
 #include "MemoryLevel.h"
 #include "OSDependent/omnisci_fs.h"
 #include "PersistentStorageMgr/PersistentStorageMgr.h"
 #include "SchemaMgr/ColumnInfo.h"
+#include "Shared/Config.h"
 
 #include <fstream>
 #include <iomanip>
@@ -46,10 +50,6 @@ namespace File_Namespace {
 class FileBuffer;
 }  // namespace File_Namespace
 
-namespace CudaMgr_Namespace {
-class CudaMgr;
-}
-
 namespace Buffer_Namespace {
 class CpuBufferMgr;
 }
@@ -57,23 +57,6 @@ class CpuBufferMgr;
 struct DictDescriptor;
 
 namespace Data_Namespace {
-
-struct MemoryData {
-  size_t slabNum;
-  int32_t startPage;
-  size_t numPages;
-  uint32_t touch;
-  std::vector<int32_t> chunk_key;
-  Buffer_Namespace::MemStatus memStatus;
-};
-
-struct MemoryInfo {
-  size_t pageSize;
-  size_t maxNumPages;
-  size_t numPageAllocated;
-  bool isAllocationCapped;
-  std::vector<MemoryData> nodeMemoryData;
-};
 
 //! Parse /proc/meminfo into key/value pairs.
 class ProcMeminfoParser {
@@ -172,10 +155,9 @@ class ProcBuddyinfoParser {
 
 class DataMgr {
  public:
-  explicit DataMgr(const std::string& dataDir,
+  explicit DataMgr(const Config& config,
                    const SystemParameters& system_parameters,
-                   std::unique_ptr<CudaMgr_Namespace::CudaMgr> cudaMgr,
-                   const bool useGpus,
+                   std::map<GpuMgrName, std::unique_ptr<GpuMgr>>&& gpuMgrs,
                    const size_t reservedGpuMem = (1 << 27),
                    const size_t numReaderThreads = 0);
   ~DataMgr();
@@ -198,22 +180,26 @@ class DataMgr {
   bool isBufferOnDevice(const ChunkKey& key,
                         const MemoryLevel memLevel,
                         const int deviceId);
-  std::vector<MemoryInfo> getMemoryInfo(const MemoryLevel memLevel);
+  std::vector<Buffer_Namespace::MemoryInfo> getMemoryInfo(const MemoryLevel memLevel);
   std::string dumpLevel(const MemoryLevel memLevel);
   void clearMemory(const MemoryLevel memLevel);
 
   const std::map<ChunkKey, File_Namespace::FileBuffer*>& getChunkMap();
-  void checkpoint(const int db_id,
-                  const int tb_id);  // checkpoint for individual table of DB
-  void checkpoint(const int db_id, const int table_id, const MemoryLevel memory_level);
   void getChunkMetadataVecForKeyPrefix(ChunkMetadataVector& chunkMetadataVec,
                                        const ChunkKey& keyPrefix);
   inline bool gpusPresent() const { return hasGpus_; }
-  void removeTableRelatedDS(const int db_id, const int tb_id);
   void setTableEpoch(const int db_id, const int tb_id, const int start_epoch);
   size_t getTableEpoch(const int db_id, const int tb_id);
 
-  CudaMgr_Namespace::CudaMgr* getCudaMgr() const { return cudaMgr_.get(); }
+  void setGpuMgrContext(GpuMgrName name);
+  CudaMgr_Namespace::CudaMgr* getCudaMgr() const {
+    return dynamic_cast<CudaMgr_Namespace::CudaMgr*>(getGpuMgr(GpuMgrName::CUDA));
+  }
+  l0::L0Manager* getL0Mgr() const {
+    return dynamic_cast<l0::L0Manager*>(getGpuMgr(GpuMgrName::L0));
+  }
+  GpuMgr* getGpuMgr(GpuMgrName name) const;
+  GpuMgr* getGpuMgr() const { return gpuMgrContext_; }
 
   // database_id, table_id, column_id, fragment_id
   std::vector<int> levelSizes_;
@@ -232,15 +218,11 @@ class DataMgr {
   static size_t getTotalSystemMemory();
 
   PersistentStorageMgr* getPersistentStorageMgr() const;
-  void resetPersistentStorage(const size_t num_reader_threads,
-                              const SystemParameters& sys_params);
 
   // Used for testing.
   Buffer_Namespace::CpuBufferMgr* getCpuBufferMgr() const;
 
-  const DictDescriptor* getDictMetadata(int db_id,
-                                        int dict_id,
-                                        bool load_dict = true) const;
+  const DictDescriptor* getDictMetadata(int dict_id, bool load_dict = true) const;
 
   TableFragmentsInfo getTableMetadata(int db_id, int table_id) const;
 
@@ -249,12 +231,13 @@ class DataMgr {
   DataProvider* getDataProvider() const { return data_provider_.get(); }
 
  private:
-  void populateMgrs(const SystemParameters& system_parameters,
+  void populateMgrs(const Config& config,
+                    const SystemParameters& system_parameters,
                     const size_t userSpecifiedNumReaderThreads);
   void convertDB(const std::string basePath);
-  void checkpoint();  // checkpoint for whole DB, called from convertDB proc only
   void createTopLevelMetadata() const;
   void allocateCpuBufferMgr(int32_t device_id,
+                            bool enable_tiered_cpu_mem,
                             size_t total_cpu_size,
                             size_t minCpuSlabSize,
                             size_t maxCpuSlabSize,
@@ -262,11 +245,10 @@ class DataMgr {
                             const std::vector<size_t>& cpu_tier_sizes);
 
   std::vector<std::vector<AbstractBufferMgr*>> bufferMgrs_;
-  std::unique_ptr<CudaMgr_Namespace::CudaMgr> cudaMgr_;
-  std::string dataDir_;
+  GpuMgr* gpuMgrContext_;
+  std::map<GpuMgrName, std::unique_ptr<GpuMgr>> gpuMgrs_;
   bool hasGpus_;
   size_t reservedGpuMem_;
-  std::mutex buffer_access_mutex_;
   std::unique_ptr<DataMgrBufferProvider> buffer_provider_;
   std::unique_ptr<DataMgrDataProvider> data_provider_;
 };

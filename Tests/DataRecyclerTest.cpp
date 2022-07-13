@@ -36,10 +36,6 @@
 #include <stdexcept>
 
 extern bool g_is_test_env;
-extern unsigned g_trivial_loop_join_threshold;
-extern bool g_enable_overlaps_hashjoin;
-extern bool g_enable_hashjoin_many_to_many;
-extern bool g_from_table_reordering;
 
 using namespace TestHelpers;
 using namespace TestHelpers::ArrowSQLRunner;
@@ -400,7 +396,7 @@ TEST(DataRecycler, DAG_Cache_Size_Management) {
   // get query info for DAG cache test in advance
   auto& DAG_CACHE = executor->getQueryPlanDagCache();
 
-  auto original_DAG_cache_max_size = MAX_NODE_CACHE_SIZE;
+  auto original_DAG_cache_max_size = config().cache.dag_cache_size;
   ScopeGuard reset_overlaps_state = [&original_DAG_cache_max_size, &DAG_CACHE] {
     DAG_CACHE.setNodeMapMaxSize(original_DAG_cache_max_size);
   };
@@ -556,7 +552,7 @@ TEST(DataRecycler, Perfect_Hashtable_Cache_Maintanence) {
       // test3. set hashtable cache size as 30 bytes,
       // and try to cache t1.x's hashtable (12 bytes) and then that of t4.x's (24 bytes)
       // since sizeof(t1.x) + sizeof(t4.x) > 30 we need to remove t1.x's to cache t4.x's
-      const auto original_total_cache_size = g_hashtable_cache_total_bytes;
+      const auto original_total_cache_size = config().cache.hashtable_cache_total_bytes;
       PerfectJoinHashTable::getHashTableCache()->setTotalCacheSize(
           CacheItemType::PERFECT_HT, 30);
       ScopeGuard reset_cache_status = [&original_total_cache_size] {
@@ -591,7 +587,7 @@ TEST(DataRecycler, Perfect_Hashtable_Cache_Maintanence) {
       // cache t1.x and t2.x (so total 14 * 2 = 28 bytes) and then try to cache t4.x's
       // and check whether cache only has t4.x's (remove t1.x's and t2.x's to make a room
       // for t4.x's)
-      const auto original_total_cache_size = g_hashtable_cache_total_bytes;
+      const auto original_total_cache_size = config().cache.hashtable_cache_total_bytes;
       PerfectJoinHashTable::getHashTableCache()->setTotalCacheSize(
           CacheItemType::PERFECT_HT, 30);
       ScopeGuard reset_cache_status = [&original_total_cache_size] {
@@ -634,7 +630,7 @@ TEST(DataRecycler, Perfect_Hashtable_Cache_Maintanence) {
       // and try to cache t3.x's.
       // if our cache maintenance works correctly, we should remove t2.x's since it is
       // less frequently reused one
-      const auto original_total_cache_size = g_hashtable_cache_total_bytes;
+      const auto original_total_cache_size = config().cache.hashtable_cache_total_bytes;
       PerfectJoinHashTable::getHashTableCache()->setTotalCacheSize(
           CacheItemType::PERFECT_HT, 40);
       ScopeGuard reset_cache_status = [&original_total_cache_size] {
@@ -677,7 +673,8 @@ TEST(DataRecycler, Perfect_Hashtable_Cache_Maintanence) {
       // test 6. set per_hashtable_size_limit to be 18
       // and try to cache t1.x, t2.x and t3.x
       // due to the per item limit, we can cache t1.x's and t2.x's but not t3.x's
-      const auto original_per_max_hashtable_size = g_max_cacheable_hashtable_size_bytes;
+      const auto original_per_max_hashtable_size =
+          config().cache.max_cacheable_hashtable_size_bytes;
       PerfectJoinHashTable::getHashTableCache()->setMaxCacheItemSize(
           CacheItemType::PERFECT_HT, 18);
       ScopeGuard reset_cache_status = [&original_per_max_hashtable_size] {
@@ -780,7 +777,7 @@ TEST(DataRecycler, Baseline_Hashtable_Cache_Maintanence) {
       // test3. set hashtable cache size as 150 bytes,
       // and try to cache t1's hashtable (72 bytes) and then that of t4's (144 bytes)
       // since sizeof(t1) + sizeof(t4) > 150 we need to remove t1's to cache t4's
-      const auto original_total_cache_size = g_hashtable_cache_total_bytes;
+      const auto original_total_cache_size = config().cache.hashtable_cache_total_bytes;
       BaselineJoinHashTable::getHashTableCache()->setTotalCacheSize(
           CacheItemType::BASELINE_HT, 150);
       ScopeGuard reset_cache_status = [&original_total_cache_size] {
@@ -817,7 +814,7 @@ TEST(DataRecycler, Baseline_Hashtable_Cache_Maintanence) {
       // cache t1 and t2 (so total 72+96 = 168 bytes) and then try to cache t4's
       // and check whether cache only has t4's (remove t1.x's and t2.x's to make a room
       // for t4's)
-      const auto original_total_cache_size = g_hashtable_cache_total_bytes;
+      const auto original_total_cache_size = config().cache.hashtable_cache_total_bytes;
       BaselineJoinHashTable::getHashTableCache()->setTotalCacheSize(
           CacheItemType::BASELINE_HT, 180);
       ScopeGuard reset_cache_status = [&original_total_cache_size] {
@@ -861,7 +858,7 @@ TEST(DataRecycler, Baseline_Hashtable_Cache_Maintanence) {
       // t2 since sizeof(t1) + sizeof(t2) + sizeof(t3) ? 72 + 96 + 120 > 200 if our cache
       // maintenance works correctly, we should remove t2's since it is less frequently
       // reused one (so 72 + 120 = 192 < 200)
-      const auto original_total_cache_size = g_hashtable_cache_total_bytes;
+      const auto original_total_cache_size = config().cache.hashtable_cache_total_bytes;
       BaselineJoinHashTable::getHashTableCache()->setTotalCacheSize(
           CacheItemType::BASELINE_HT, 200);
       ScopeGuard reset_cache_status = [&original_total_cache_size] {
@@ -900,7 +897,8 @@ TEST(DataRecycler, Baseline_Hashtable_Cache_Maintanence) {
       // test 6. set per_hashtable_size_limit to be 100
       // and try to cache t1 (72 bytes), t2 (96 bytes) and t3 (120 bytes)
       // due to the per item limit, we can cache t1's and t2's but not t3's
-      const auto original_per_max_hashtable_size = g_max_cacheable_hashtable_size_bytes;
+      const auto original_per_max_hashtable_size =
+          config().cache.max_cacheable_hashtable_size_bytes;
       BaselineJoinHashTable::getHashTableCache()->setMaxCacheItemSize(
           CacheItemType::BASELINE_HT, 100);
       ScopeGuard reset_cache_status = [&original_per_max_hashtable_size] {
@@ -1171,7 +1169,9 @@ TEST(DataRecycler, Hashtable_For_Dict_Encoded_Column) {
       q1a, q1b, q2a, q2b, q3a, q3b, q4a, q4b, q5a, q5b, q6a, q6b};
   std::vector<std::string> queries_case2 = {q7a, q7b, q8a, q8b, q9a, q9b};
 
-  ScopeGuard reset = [orig = g_from_table_reordering] { g_from_table_reordering = orig; };
+  ScopeGuard reset = [orig = config().opts.from_table_reordering] {
+    config().opts.from_table_reordering = orig;
+  };
 
   // 1. disable from-table-reordering
   // this means the same join query with different table listing order in FROM clause
@@ -1181,7 +1181,7 @@ TEST(DataRecycler, Hashtable_For_Dict_Encoded_Column) {
   // ... WHERE ... IN (SELECT ...) have different cache key even if their query semantic
   // is the same since their plan is different, e.g., decorrelation per query planner adds
   // de-duplication logic
-  g_from_table_reordering = false;
+  config().opts.from_table_reordering = false;
   clear_caches(ExecutorDeviceType::CPU);
   for (const auto& test_case : {q1, q2, q3, q4, q5, q6}) {
     perform_test(test_case, static_cast<size_t>(1));
@@ -1199,7 +1199,7 @@ TEST(DataRecycler, Hashtable_For_Dict_Encoded_Column) {
   // if the table cardinality and a join qual are the same, we have the same cache key
   // regardless of table listing order in FROM clause
   //
-  g_from_table_reordering = true;
+  config().opts.from_table_reordering = true;
   clear_caches(ExecutorDeviceType::CPU);
   for (const auto& test_case : {q1, q2, q3, q4, q5, q6}) {
     perform_test(test_case, static_cast<size_t>(1));
@@ -1218,7 +1218,12 @@ int main(int argc, char* argv[]) {
   testing::InitGoogleTest(&argc, argv);
   TestHelpers::init_logger_stderr_only(argc, argv);
 
-  init();
+  auto config = std::make_shared<Config>();
+
+  init(config);
+  PerfectJoinHashTable::initCaches(config);
+  BaselineJoinHashTable::initCaches(config);
+
   g_is_test_env = true;
   int err{0};
   try {

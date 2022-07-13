@@ -168,7 +168,6 @@ class ResultSet {
             const std::shared_ptr<RowSetMemoryOwner> row_set_mem_owner,
             Data_Namespace::DataMgr* data_mgr,
             BufferProvider* buffer_provider,
-            const int db_id_for_dict,
             const unsigned block_size,
             const unsigned grid_size);
 
@@ -183,7 +182,6 @@ class ResultSet {
             const std::shared_ptr<RowSetMemoryOwner> row_set_mem_owner,
             Data_Namespace::DataMgr* data_mgr,
             BufferProvider* buffer_provider,
-            const int db_id_for_dict,
             const unsigned block_size,
             const unsigned grid_size);
 
@@ -191,8 +189,7 @@ class ResultSet {
             const ExecutorDeviceType device_type,
             const int device_id,
             Data_Namespace::DataMgr* data_mgr,
-            BufferProvider* buffer_provider,
-            const int db_id_for_dict);
+            BufferProvider* buffer_provider);
 
   ResultSet(const std::string& explanation);
 
@@ -571,7 +568,8 @@ class ResultSet {
 
   size_t advanceCursorToNextEntry() const;
 
-  void radixSortOnGpu(const std::list<Analyzer::OrderEntry>& order_entries) const;
+  void radixSortOnGpu(const Config& config,
+                      const std::list<Analyzer::OrderEntry>& order_entries) const;
 
   void radixSortOnCpu(const std::list<Analyzer::OrderEntry>& order_entries) const;
 
@@ -854,7 +852,6 @@ class ResultSet {
   mutable int8_t* host_estimator_buffer_{nullptr};
   Data_Namespace::DataMgr* data_mgr_{nullptr};
   BufferProvider* buffer_provider_{nullptr};
-  const int db_id_for_dict_{-1};
 
   // only used by serialization
   using SerializedVarlenBufferStorage = std::vector<std::string>;
@@ -899,7 +896,9 @@ inline ResultSetRowIterator& ResultSetRowIterator::operator++(void) {
 
 class ResultSetManager {
  public:
-  ResultSet* reduce(std::vector<ResultSet*>&, const size_t executor_id);
+  ResultSet* reduce(std::vector<ResultSet*>&,
+                    const size_t executor_id,
+                    const Config& config);
 
   std::shared_ptr<ResultSet> getOwnResultSet();
 

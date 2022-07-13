@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.17)
 
 # Required for LLVM / JIT, alternative to setting CMP0065 to OLD
 set(CMAKE_ENABLE_EXPORTS True)
@@ -47,11 +47,7 @@ endif()
 
 project(omnisci)
 
-if(NOT EXISTS "${CMAKE_SOURCE_DIR}/Rendering")
-  set(MAPD_EDITION "OS")
-elseif(NOT DEFINED MAPD_EDITION)
-  set(MAPD_EDITION "EE")
-endif()
+set(MAPD_EDITION "OS")
 set(MAPD_EDITION "${MAPD_EDITION}" CACHE STRING "MapD edition" FORCE)
 set_property(CACHE MAPD_EDITION PROPERTY STRINGS "EE" "CE" "OS")
 add_definitions("-DMAPD_EDITION_${MAPD_EDITION}")
@@ -142,15 +138,17 @@ endif()
 option(ENABLE_L0 "Enable level zero support" OFF)
 if(ENABLE_L0)
   find_package(LevelZero REQUIRED COMPONENTS ${LevelZero_COMPONENTS})
+  include_directories(${LevelZero_INCLUDE_DIRS})
   add_definitions("-DHAVE_L0")
 endif()
 
 option(ENABLE_CUDA "Enable CUDA support" ON)
 if(ENABLE_CUDA)
   enable_language(CUDA)
-  find_library(CUDA_LIBRARY cuda HINTS "$ENV{CONDA_PREFIX}/pkgs/cuda-toolkit/targets/x86_64-linux/lib/stubs")
-  find_library(CUDART_LIBRARY cudart HINTS "$ENV{CONDA_PREFIX}/pkgs/cuda-toolkit/targets/x86_64-linux/lib")
-  set(CUDA_LIBRARIES "${CUDA_LIBRARY}" "${CUDART_LIBRARY}")
+  find_package(CUDAToolkit REQUIRED)
+  # A temporary workaround for non-conda envs
+  include_directories(${CUDAToolkit_INCLUDE_DIRS})
+  list(APPEND CUDA_LIBRARIES CUDA::cudart CUDA::cuda_driver)
   add_definitions("-DHAVE_CUDA")
 
 else()
@@ -283,6 +281,11 @@ if (ENABLE_JIT_DEBUG)
   add_definitions("-DWITH_JIT_DEBUG")
 endif()
 
+option(ENABLE_ORCJIT "Enable LLVM ORCJIT in place of MCJIT" ON)
+if(ENABLE_ORCJIT)
+  add_definitions("-DENABLE_ORCJIT")
+endif()
+
 if(XCODE)
   if(ENABLE_CUDA)
     set(CMAKE_EXE_LINKER_FLAGS "-F/Library/Frameworks -framework CUDA")
@@ -306,13 +309,7 @@ endif()
 
 find_package(Git)
 find_package(Glog REQUIRED)
-find_package(PNG REQUIRED)
 find_package(ZLIB REQUIRED)
-find_package(GDAL REQUIRED)
-find_package(GDALExtra REQUIRED)
-find_package(BLOSC REQUIRED)
-list(APPEND GDAL_LIBRARIES ${PNG_LIBRARIES} ${GDALExtra_LIBRARIES})
-include_directories(${GDAL_INCLUDE_DIRS})
 
 option(ENABLE_FOLLY "Use Folly" ON)
 if(ENABLE_FOLLY)
@@ -475,7 +472,7 @@ find_library(CLANG_LIB clang-cpp)
 find_library(LLVM_LIB LLVM)
 # Deps builds use separate libs for each clang component, while some distros now bundle into a single lib
 if (${CMAKE_SYSTEM_NAME} STREQUAL "Darwin" OR NOT LLVM_LIB)
-  set(LLVM_COMPONENTS support mcjit core irreader option linker)
+  set(LLVM_COMPONENTS support mcjit orcjit core irreader option linker)
 
   if(ENABLE_INTEL_JIT_LISTENER)
     list(APPEND LLVM_COMPONENTS inteljitevents)
@@ -563,11 +560,6 @@ find_package(Arrow REQUIRED)
 add_definitions("-DARROW_NO_DEPRECATED_API")
 include_directories(${Arrow_INCLUDE_DIRS})
 
-option(ENABLE_ARROW_4 "Enable changes required to support Arrow 4.0+" "${HAVE_ARROW_4_IO_CONTEXT}")
-if(ENABLE_ARROW_4)
-  add_definitions("-DENABLE_ARROW_4")
-endif()
-
 option(ENABLE_IMPORT_PARQUET "Enable Parquet Importer support" ON)
 if(ENABLE_IMPORT_PARQUET)
   find_package(Parquet)
@@ -597,10 +589,6 @@ add_definitions(-DRAPIDJSON_HAS_STDSTRING)
 # SQLite
 include_directories(ThirdParty/sqlite3)
 add_subdirectory(ThirdParty/sqlite3)
-
-# libarchive
-find_package(LibArchive REQUIRED)
-include_directories(${LibArchive_INCLUDE_DIRS})
 
 find_package(CURL REQUIRED QUIET)
 if(CURL_FOUND)
@@ -662,32 +650,6 @@ set(gen_cpp_files
 
 list(APPEND ADDITIONAL_MAKE_CLEAN_FILES ${CMAKE_BINARY_DIR}/gen-cpp/)
 
-set(MAPD_RENDERING_LIBRARIES "")
-if(NOT "${MAPD_EDITION_LOWER}" STREQUAL "os")
-  option(ENABLE_RENDERING "Build backend renderer" OFF)
-  if(ENABLE_RENDERING)
-    # muparserx - currently render-only
-    include_directories(ThirdParty/muparserx)
-    add_subdirectory(ThirdParty/muparserx)
-
-    option(ENABLE_RENDER_TESTS "Build backend renderer tests" ON)
-
-    add_definitions("-DHAVE_RENDERING")
-    add_subdirectory(Rendering)
-    add_subdirectory(QueryRenderer)
-
-    include_directories(${RENDERING_INCLUDE_DIRS})
-    set(MAPD_RENDERING_LIBRARIES QueryRenderer Rendering)
-
-    set(MAPD_PACKAGE_FLAGS "${MAPD_PACKAGE_FLAGS}-render")
-    if(${RENDERER_CONTEXT_TYPE} STREQUAL "GLX")
-      set(MAPD_PACKAGE_FLAGS "${MAPD_PACKAGE_FLAGS}-glx")
-    endif()
-  endif()
-else()
-  set(ENABLE_RENDERING OFF CACHE BOOL "Build backend renderer" FORCE)
-endif()
-
 set(TIME_LIMITED_NUMBER_OF_DAYS "30" CACHE STRING "Number of days this build is valid for if build is time limited")
 
 option(TIME_LIMITED_BUILD "Build Time Limited Build" OFF)
@@ -713,6 +675,7 @@ add_subdirectory(Calcite)
 
 add_subdirectory(ArrowStorage)
 add_subdirectory(Analyzer)
+add_subdirectory(ConfigBuilder)
 add_subdirectory(QueryEngine)
 add_subdirectory(DataMgr)
 add_subdirectory(CudaMgr)
@@ -740,10 +703,6 @@ endif()
 
 list(APPEND MAPD_LIBRARIES Calcite)
 
-if(ENABLE_RENDERING)
-  list(APPEND MAPD_LIBRARIES "${MAPD_RENDERING_LIBRARIES}")
-endif()
-
 list(APPEND MAPD_LIBRARIES ${Arrow_LIBRARIES})
 
 if(ENABLE_FOLLY)
@@ -770,11 +729,6 @@ endif()
 option(ENABLE_BENCHMARKS "Build benchmarks" ON)
 if (ENABLE_TESTS AND ENABLE_BENCHMARKS)
   add_subdirectory(Benchmarks/taxi)
-endif()
-
-if(ENABLE_RENDERING AND ENABLE_RENDER_TESTS)
-  enable_testing()
-  add_subdirectory(Tests/RenderTests)
 endif()
 
 execute_process(
@@ -850,10 +804,6 @@ set(CPACK_RPM_SPEC_MORE_DEFINE "%define __jar_repack %{nil}")
 if("${MAPD_EDITION_LOWER}" STREQUAL "ee")
   set(CPACK_DEBIAN_PACKAGE_DEPENDS "${CPACK_DEBIAN_PACKAGE_DEPENDS}, libldap-2.4-2")
 endif()
-if(ENABLE_RENDERING)
-  set(CPACK_RPM_PACKAGE_REQUIRES "${CPACK_RPM_PACKAGE_REQUIRES}, libX11, libXext")
-  set(CPACK_DEBIAN_PACKAGE_DEPENDS "${CPACK_DEBIAN_PACKAGE_DEPENDS}, libx11-6, libxext6")
-endif()
 
 set_dpkg_arch(${CMAKE_SYSTEM_PROCESSOR} CPACK_DEBIAN_PACKAGE_ARCHITECTURE)
 
@@ -883,11 +833,6 @@ if(MAPD_IMMERSE_DOWNLOAD)
   install(DIRECTORY ${source_dir}/ DESTINATION "frontend/" PATTERN .git EXCLUDE PATTERN node_modules EXCLUDE)
   add_custom_command(TARGET frontend COMMAND ${CMAKE_COMMAND} -E copy_directory ${source_dir} frontend)
   list(APPEND ADDITIONAL_MAKE_CLEAN_FILES ${CMAKE_BINARY_DIR}/frontend)
-
-  ## Go web server
-  if("${MAPD_EDITION_LOWER}" STREQUAL "ee" AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Immerse")
-    add_subdirectory(Immerse)
-  endif()
 endif()
 
 # systemd
@@ -900,55 +845,6 @@ if(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
   install(FILES systemd/omnisci.conf.in DESTINATION systemd)
   install(PROGRAMS systemd/install_omnisci_systemd.sh DESTINATION systemd)
 endif()
-
-## mvn process for java code
-find_program(MVN_EXECUTABLE NAMES mvn)
-if(NOT MVN_EXECUTABLE)
-  message(FATAL_ERROR "mvn not found. Install Apache Maven.")
-endif()
-file(GLOB_RECURSE JAVA_POM RELATIVE ${CMAKE_SOURCE_DIR} java/**/pom.xml)
-file(GLOB_RECURSE JAVA_FTL RELATIVE ${CMAKE_SOURCE_DIR} java/calcite/src/main/codegen/includes/*.ftl)
-file(GLOB_RECURSE JAVA_SOURCES RELATIVE ${CMAKE_SOURCE_DIR} java/**/*.java)
-list(FILTER JAVA_SOURCES EXCLUDE REGEX ".*/gen/.*")
-list(FILTER JAVA_SOURCES EXCLUDE REGEX ".*/generated-sources/.*")
-
-set(OMNISCI_JAR_RELEASE_VERSION "${MAPD_VERSION_MAJOR}.${MAPD_VERSION_MINOR}.${MAPD_VERSION_PATCH}")
-if("${MAPD_VERSION_EXTRA}" STREQUAL "dev")
-  set (OMNISCI_JAR_RELEASE_VERSION "${OMNISCI_JAR_RELEASE_VERSION}-SNAPSHOT")
-endif()
-
-set(MVN_PATH_COMMAND "")
-if(NOT MSVC) 
-    set(MVN_PATH_COMMAND "MVNPATH=${CMAKE_SOURCE_DIR}/java")
-endif()
-
-add_custom_command(
-  OUTPUT
-    ${CMAKE_BINARY_DIR}/bin/calcite-1.0-SNAPSHOT-jar-with-dependencies.jar
-    COMMAND ${MVN_PATH_COMMAND} ${MVN_EXECUTABLE} -l ${CMAKE_BINARY_DIR}/mvn_build.log -e clean install -Dmaven.compiler.showDeprecation=true -Dmaven.compiler.showWarnings=true -Domnisci.release.version="${OMNISCI_JAR_RELEASE_VERSION}" -Djava.net.preferIPv4Stack=true -Dmaven.wagon.http.retryHandler.count=3 -DMAPD_LOG_DIR="${CMAKE_BINARY_DIR}"
-    COMMAND mkdir -p ${CMAKE_BINARY_DIR}/bin
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/java/calcite/target/calcite-1.0-SNAPSHOT-jar-with-dependencies.jar ${CMAKE_BINARY_DIR}/bin
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/java
-  DEPENDS
-    ${CMAKE_SOURCE_DIR}/java/calcite/src/main/codegen/config.fmpp
-    ${CMAKE_SOURCE_DIR}/java/pom.xml
-    ${JAVA_POM}
-    ${JAVA_SOURCES}
-    ${JAVA_FTL}
-  )
-add_custom_target(mapd_java_components ALL DEPENDS
-  ${CMAKE_BINARY_DIR}/bin/calcite-1.0-SNAPSHOT-jar-with-dependencies.jar)
-add_custom_target(mapd_java_clean
-  COMMAND ${MVN_PATH_COMMAND} ${MVN_EXECUTABLE} -q clean -Domnisci.release.version="${OMNISCI_JAR_RELEASE_VERSION}"
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/java
-  )
-add_dependencies(clean-all mapd_java_clean)
-install(FILES ${CMAKE_SOURCE_DIR}/java/calcite/target/calcite-1.0-SNAPSHOT-jar-with-dependencies.jar DESTINATION bin COMPONENT "jar")
-
-add_custom_target(maven_populate_cache
-  COMMAND ${MVN_PATH_COMMAND} ${MVN_EXECUTABLE} -q verify -Domnisci.release.version="${OMNISCI_JAR_RELEASE_VERSION}"
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/java
-  )
 
 set_directory_properties(PROPERTIES ADDITIONAL_MAKE_CLEAN_FILES "${ADDITIONAL_MAKE_CLEAN_FILES}")
 
@@ -978,11 +874,8 @@ install(PROGRAMS startomnisci DESTINATION ".")
 install(PROGRAMS scripts/inneromnisci DESTINATION "scripts")
 install(PROGRAMS insert_sample_data DESTINATION ".")
 
-if("${MAPD_EDITION_LOWER}" STREQUAL "ee")
-  install(DIRECTORY docker/sds DESTINATION "docker")
-endif()
 install(FILES docker/README.md DESTINATION "docker")
-if(ENABLE_CUDA OR ENABLE_RENDERING)
+if(ENABLE_CUDA)
   install(FILES docker/Dockerfile.cuda RENAME Dockerfile DESTINATION "docker")
 else()
   install(FILES docker/Dockerfile.cpu RENAME Dockerfile DESTINATION "docker")

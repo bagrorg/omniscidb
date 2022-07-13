@@ -12,7 +12,6 @@ unset CMAKE_GENERATOR
 # Install all normal dependencies
 yay -S \
     aws-sdk-cpp \
-    blosc \
     boost \
     c-ares \
     clang \
@@ -22,8 +21,6 @@ yay -S \
     flex \
     fmt \
     gcc \
-    gdal \
-    geos \
     git \
     glbinding \
     go \
@@ -40,7 +37,6 @@ yay -S \
     python-numpy \
     snappy \
     thrift \
-    vulkan-headers \
     wget \
     zlib
 

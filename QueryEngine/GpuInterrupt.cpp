@@ -17,33 +17,29 @@
 #include "DynamicWatchdog.h"
 #include "Execute.h"
 
-extern bool g_enable_runtime_query_interrupt;
-extern bool g_enable_non_kernel_time_query_interrupt;
-extern bool g_enable_dynamic_watchdog;
-
-void Executor::registerActiveModule(void* module, const int device_id) const {
+void Executor::registerActiveModule(void* llvm_module, const int device_id) const {
 #ifdef HAVE_CUDA
   std::lock_guard<std::mutex> lock(gpu_active_modules_mutex_);
   CHECK_LT(device_id, max_gpu_count);
   gpu_active_modules_device_mask_ |= (1 << device_id);
-  gpu_active_modules_[device_id] = module;
+  gpu_active_modules_[device_id] = llvm_module;
   VLOG(1) << "Executor " << executor_id_ << ", mask 0x" << std::hex
-          << gpu_active_modules_device_mask_ << ": Registered module " << module
+          << gpu_active_modules_device_mask_ << ": Registered module " << llvm_module
           << " on device " << std::to_string(device_id);
 #endif
 }
 
-void Executor::unregisterActiveModule(void* module, const int device_id) const {
+void Executor::unregisterActiveModule(void* llvm_module, const int device_id) const {
 #ifdef HAVE_CUDA
   std::lock_guard<std::mutex> lock(gpu_active_modules_mutex_);
   CHECK_LT(device_id, max_gpu_count);
   if ((gpu_active_modules_device_mask_ & (1 << device_id)) == 0) {
     return;
   }
-  CHECK_EQ(gpu_active_modules_[device_id], module);
+  CHECK_EQ(gpu_active_modules_[device_id], llvm_module);
   gpu_active_modules_device_mask_ ^= (1 << device_id);
   VLOG(1) << "Executor " << executor_id_ << ", mask 0x" << std::hex
-          << gpu_active_modules_device_mask_ << ": Unregistered module " << module
+          << gpu_active_modules_device_mask_ << ": Unregistered module " << llvm_module
           << " on device " << std::to_string(device_id);
 #endif
 }
@@ -51,7 +47,8 @@ void Executor::unregisterActiveModule(void* module, const int device_id) const {
 void Executor::interrupt(const std::string& query_session,
                          const std::string& interrupt_session) {
   const auto allow_interrupt =
-      g_enable_runtime_query_interrupt || g_enable_non_kernel_time_query_interrupt;
+      config_->exec.interrupt.enable_runtime_query_interrupt ||
+      config_->exec.interrupt.enable_non_kernel_time_query_interrupt;
   if (allow_interrupt) {
     bool is_running_query = false;
     {
@@ -101,9 +98,9 @@ void Executor::interrupt(const std::string& query_session,
   // In this case, we should not execute the code in below to avoid runtime failure
   CHECK(data_mgr_);
   auto cuda_mgr = data_mgr_->getCudaMgr();
-  if (cuda_mgr && (g_enable_dynamic_watchdog || allow_interrupt)) {
+  if (cuda_mgr && (config_->exec.watchdog.enable_dynamic || allow_interrupt)) {
     // we additionally allow sending interrupt signal for
-    // `g_enable_non_kernel_time_query_interrupt` especially for CTAS/ITAS queries: data
+    // `enable_non_kernel_time_query_interrupt` especially for CTAS/ITAS queries: data
     // population happens on CPU but select_query can be processed via GPU
     CHECK_GE(cuda_mgr->getDeviceCount(), 1);
     std::lock_guard<std::mutex> lock(gpu_active_modules_mutex_);
@@ -113,8 +110,8 @@ void Executor::interrupt(const std::string& query_session,
     checkCudaErrors(cuCtxGetCurrent(&old_cu_context));
     for (int device_id = 0; device_id < max_gpu_count; device_id++) {
       if (gpu_active_modules_device_mask_ & (1 << device_id)) {
-        void* module = gpu_active_modules_[device_id];
-        auto cu_module = static_cast<CUmodule>(module);
+        void* llvm_module = gpu_active_modules_[device_id];
+        auto cu_module = static_cast<CUmodule>(llvm_module);
         if (!cu_module) {
           continue;
         } else {
@@ -138,7 +135,7 @@ void Executor::interrupt(const std::string& query_session,
         cuEventCreate(&stop, 0);
         cuEventRecord(start, cu_stream1);
 
-        if (g_enable_dynamic_watchdog) {
+        if (config_->exec.watchdog.enable_dynamic) {
           CUdeviceptr dw_abort;
           size_t dw_abort_size;
           if (cuModuleGetGlobal(&dw_abort, &dw_abort_size, cu_module, "dw_abort") ==
@@ -215,7 +212,7 @@ void Executor::interrupt(const std::string& query_session,
     }
   }
 #endif
-  if (g_enable_dynamic_watchdog) {
+  if (config_->exec.watchdog.enable_dynamic) {
     dynamic_watchdog_init(static_cast<unsigned>(DW_ABORT));
   }
 
@@ -231,8 +228,9 @@ void Executor::resetInterrupt() {
   std::lock_guard<std::mutex> lock(gpu_active_modules_mutex_);
 #endif
   const auto allow_interrupt =
-      g_enable_runtime_query_interrupt || g_enable_non_kernel_time_query_interrupt;
-  if (g_enable_dynamic_watchdog) {
+      config_->exec.interrupt.enable_runtime_query_interrupt ||
+      config_->exec.interrupt.enable_non_kernel_time_query_interrupt;
+  if (config_->exec.watchdog.enable_dynamic) {
     dynamic_watchdog_init(static_cast<unsigned>(DW_RESET));
   } else if (allow_interrupt) {
     VLOG(1) << "Reset interrupt flag for CPU execution kernel on Executor "

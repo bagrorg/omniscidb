@@ -24,7 +24,6 @@
 #include "MapDRelease.h"
 #include "OSDependent/omnisci_fs.h"
 #include "QueryEngine/GroupByAndAggregate.h"
-#include "Shared/Compressor.h"
 #include "StringDictionary/StringDictionary.h"
 
 #ifdef _WIN32
@@ -36,19 +35,14 @@ const std::string CommandLineOptions::nodeIds_token = {"node_id"};
 extern std::string cluster_command_line_arg;
 
 extern bool g_use_table_device_offset;
-extern float g_fraction_code_cache_to_evict;
 extern bool g_cache_string_hash;
 extern bool g_enable_idp_temporary_users;
-extern bool g_enable_left_join_filter_hoisting;
 extern int64_t g_large_ndv_threshold;
 extern size_t g_large_ndv_multiplier;
 extern int64_t g_bitmap_memory_limit;
 extern bool g_enable_calcite_ddl_parser;
 extern size_t g_approx_quantile_buffer;
 extern size_t g_approx_quantile_centroids;
-extern size_t g_parallel_top_min;
-extern size_t g_parallel_top_max;
-extern size_t g_streaming_topn_max;
 extern size_t g_estimator_failure_max_groupby_size;
 extern bool g_columnar_large_projections;
 extern size_t g_columnar_large_projections_threshold;
@@ -73,22 +67,11 @@ void CommandLineOptions::init_logging() {
 
 void CommandLineOptions::fillOptions() {
   help_desc.add_options()("help,h", "Show available options.");
-  help_desc.add_options()(
-      "allow-cpu-retry",
-      po::value<bool>(&g_allow_cpu_retry)
-          ->default_value(g_allow_cpu_retry)
-          ->implicit_value(true),
-      R"(Allow the queries which failed on GPU to retry on CPU, even when watchdog is enabled.)");
   help_desc.add_options()("allow-loop-joins",
                           po::value<bool>(&allow_loop_joins)
                               ->default_value(allow_loop_joins)
                               ->implicit_value(true),
                           "Enable loop joins.");
-  help_desc.add_options()("bigint-count",
-                          po::value<bool>(&g_bigint_count)
-                              ->default_value(g_bigint_count)
-                              ->implicit_value(true),
-                          "Use 64-bit count.");
   help_desc.add_options()("calcite-max-mem",
                           po::value<size_t>(&system_parameters.calcite_max_mem)
                               ->default_value(system_parameters.calcite_max_mem),
@@ -112,11 +95,6 @@ void CommandLineOptions::fillOptions() {
                               ->default_value(system_parameters.cpu_only)
                               ->implicit_value(true),
                           "Run on CPU only, even if GPUs are available.");
-  help_desc.add_options()("enable-heterogeneous",
-                          po::value<bool>(&g_enable_heterogeneous_execution)
-                              ->default_value(g_enable_heterogeneous_execution)
-                              ->implicit_value(true),
-                          "Allow the engine to schedule kernels heterogeneously.");
   help_desc.add_options()("cuda-block-size",
                           po::value<size_t>(&system_parameters.cuda_block_size)
                               ->default_value(system_parameters.cuda_block_size),
@@ -139,33 +117,6 @@ void CommandLineOptions::fillOptions() {
       "exit-after-warmup",
       po::value<bool>(&exit_after_warmup)->default_value(false)->implicit_value(true),
       "Exit after OmniSci warmup queries.");
-  help_desc.add_options()("dynamic-watchdog-time-limit",
-                          po::value<unsigned>(&dynamic_watchdog_time_limit)
-                              ->default_value(dynamic_watchdog_time_limit)
-                              ->implicit_value(10000),
-                          "Dynamic watchdog time limit, in milliseconds.");
-  help_desc.add_options()("enable-data-recycler",
-                          po::value<bool>(&enable_data_recycler)
-                              ->default_value(enable_data_recycler)
-                              ->implicit_value(true),
-                          "Use data recycler.");
-  help_desc.add_options()("use-hashtable-cache",
-                          po::value<bool>(&use_hashtable_cache)
-                              ->default_value(use_hashtable_cache)
-                              ->implicit_value(true),
-                          "Use hashtable cache.");
-  help_desc.add_options()(
-      "hashtable-cache-total-bytes",
-      po::value<size_t>(&hashtable_cache_total_bytes)
-          ->default_value(hashtable_cache_total_bytes)
-          ->implicit_value(4294967296),
-      "Size of total memory space for hashtable cache, in bytes (default: 4GB).");
-  help_desc.add_options()("max-cacheable-hashtable-size-bytes",
-                          po::value<size_t>(&max_cacheable_hashtable_size_bytes)
-                              ->default_value(max_cacheable_hashtable_size_bytes)
-                              ->implicit_value(2147483648),
-                          "The maximum size of hashtable that is available to cache, in "
-                          "bytes (default: 2GB).");
   help_desc.add_options()("enable-debug-timer",
                           po::value<bool>(&g_enable_debug_timer)
                               ->default_value(g_enable_debug_timer)
@@ -176,57 +127,13 @@ void CommandLineOptions::fillOptions() {
                               ->default_value(enable_dynamic_watchdog)
                               ->implicit_value(true),
                           "Enable dynamic watchdog.");
-  help_desc.add_options()("enable-filter-push-down",
-                          po::value<bool>(&g_enable_filter_push_down)
-                              ->default_value(g_enable_filter_push_down)
-                              ->implicit_value(true),
-                          "Enable filter push down through joins.");
-  help_desc.add_options()("enable-overlaps-hashjoin",
-                          po::value<bool>(&g_enable_overlaps_hashjoin)
-                              ->default_value(g_enable_overlaps_hashjoin)
-                              ->implicit_value(true),
-                          "Enable the overlaps hash join framework allowing for range "
-                          "join (e.g. spatial overlaps) computation using a hash table.");
-  help_desc.add_options()("enable-hashjoin-many-to-many",
-                          po::value<bool>(&g_enable_hashjoin_many_to_many)
-                              ->default_value(g_enable_hashjoin_many_to_many)
-                              ->implicit_value(true),
-                          "Enable the overlaps hash join framework allowing for range "
-                          "join (e.g. spatial overlaps) computation using a hash table.");
-  help_desc.add_options()("enable-distance-rangejoin",
-                          po::value<bool>(&g_enable_distance_rangejoin)
-                              ->default_value(g_enable_distance_rangejoin)
-                              ->implicit_value(true),
-                          "Enable accelerating point distance joins with a hash table. "
-                          "This rewrites ST_Distance when using an upperbound (<= X).");
-  help_desc.add_options()("enable-runtime-query-interrupt",
-                          po::value<bool>(&enable_runtime_query_interrupt)
-                              ->default_value(enable_runtime_query_interrupt)
-                              ->implicit_value(true),
-                          "Enable runtime query interrupt.");
-  help_desc.add_options()("enable-non-kernel-time-query-interrupt",
-                          po::value<bool>(&enable_non_kernel_time_query_interrupt)
-                              ->default_value(enable_non_kernel_time_query_interrupt)
-                              ->implicit_value(true),
-                          "Enable non-kernel time query interrupt.");
   help_desc.add_options()("pending-query-interrupt-freq",
                           po::value<unsigned>(&pending_query_interrupt_freq)
                               ->default_value(pending_query_interrupt_freq)
                               ->implicit_value(1000),
                           "A frequency of checking the request of pending query "
                           "interrupt from user (in millisecond).");
-  help_desc.add_options()(
-      "running-query-interrupt-freq",
-      po::value<double>(&running_query_interrupt_freq)
-          ->default_value(running_query_interrupt_freq)
-          ->implicit_value(0.5),
-      "A frequency of checking the request of running query "
-      "interrupt from user (0.0 (less frequent) ~ (more frequent) 1.0).");
-  help_desc.add_options()("use-estimator-result-cache",
-                          po::value<bool>(&use_estimator_result_cache)
-                              ->default_value(use_estimator_result_cache)
-                              ->implicit_value(true),
-                          "Use estimator result cache.");
+
   if (!dist_v5_) {
     help_desc.add_options()(
         "enable-string-dict-hash-cache",
@@ -240,30 +147,7 @@ void CommandLineOptions::fillOptions() {
                               ->default_value(enable_watchdog)
                               ->implicit_value(true),
                           "Enable watchdog.");
-  help_desc.add_options()(
-      "filter-push-down-low-frac",
-      po::value<float>(&g_filter_push_down_low_frac)
-          ->default_value(g_filter_push_down_low_frac)
-          ->implicit_value(g_filter_push_down_low_frac),
-      "Lower threshold for selectivity of filters that are pushed down.");
-  help_desc.add_options()(
-      "filter-push-down-high-frac",
-      po::value<float>(&g_filter_push_down_high_frac)
-          ->default_value(g_filter_push_down_high_frac)
-          ->implicit_value(g_filter_push_down_high_frac),
-      "Higher threshold for selectivity of filters that are pushed down.");
-  help_desc.add_options()("filter-push-down-passing-row-ubound",
-                          po::value<size_t>(&g_filter_push_down_passing_row_ubound)
-                              ->default_value(g_filter_push_down_passing_row_ubound)
-                              ->implicit_value(g_filter_push_down_passing_row_ubound),
-                          "Upperbound on the number of rows that should pass the filter "
-                          "if the selectivity is less than "
-                          "the high fraction threshold.");
-  help_desc.add_options()("from-table-reordering",
-                          po::value<bool>(&g_from_table_reordering)
-                              ->default_value(g_from_table_reordering)
-                              ->implicit_value(true),
-                          "Enable automatic table reordering in FROM clause.");
+
   help_desc.add_options()("gpu-buffer-mem-bytes",
                           po::value<size_t>(&system_parameters.gpu_buffer_mem_bytes)
                               ->default_value(system_parameters.gpu_buffer_mem_bytes),
@@ -273,12 +157,6 @@ void CommandLineOptions::fillOptions() {
                               ->default_value(system_parameters.gpu_input_mem_limit),
                           "Force query to CPU when input data memory usage exceeds this "
                           "percentage of available GPU memory.");
-  help_desc.add_options()(
-      "hll-precision-bits",
-      po::value<int>(&g_hll_precision_bits)
-          ->default_value(g_hll_precision_bits)
-          ->implicit_value(g_hll_precision_bits),
-      "Number of bits used from the hash value used to specify the bucket number.");
   if (!dist_v5_) {
     help_desc.add_options()("http-port",
                             po::value<int>(&http_port)->default_value(http_port),
@@ -288,13 +166,6 @@ void CommandLineOptions::fillOptions() {
       "idle-session-duration",
       po::value<int>(&idle_session_duration)->default_value(idle_session_duration),
       "Maximum duration of idle session.");
-  help_desc.add_options()("inner-join-fragment-skipping",
-                          po::value<bool>(&g_inner_join_fragment_skipping)
-                              ->default_value(g_inner_join_fragment_skipping)
-                              ->implicit_value(true),
-                          "Enable/disable inner join fragment skipping. This feature is "
-                          "considered stable and is enabled by default. This "
-                          "parameter will be removed in a future release.");
   help_desc.add_options()(
       "max-session-duration",
       po::value<int>(&max_session_duration)->default_value(max_session_duration),
@@ -304,29 +175,9 @@ void CommandLineOptions::fillOptions() {
                               ->default_value(system_parameters.num_sessions),
                           "Maximum number of active session.");
   help_desc.add_options()(
-      "null-div-by-zero",
-      po::value<bool>(&g_null_div_by_zero)
-          ->default_value(g_null_div_by_zero)
-          ->implicit_value(true),
-      "Return null on division by zero instead of throwing an exception.");
-  help_desc.add_options()(
       "num-reader-threads",
       po::value<size_t>(&num_reader_threads)->default_value(num_reader_threads),
       "Number of reader threads to use.");
-  help_desc.add_options()(
-      "max-import-threads",
-      po::value<size_t>(&g_max_import_threads)->default_value(g_max_import_threads),
-      "Max number of default import threads to use (num hardware threads will be used "
-      "instead if lower). Can be overriden with copy statement threads option).");
-  help_desc.add_options()(
-      "overlaps-max-table-size-bytes",
-      po::value<size_t>(&g_overlaps_max_table_size_bytes)
-          ->default_value(g_overlaps_max_table_size_bytes),
-      "The maximum size in bytes of the hash table for an overlaps hash join.");
-  help_desc.add_options()("overlaps-target-entries-per-bin",
-                          po::value<double>(&g_overlaps_target_entries_per_bin)
-                              ->default_value(g_overlaps_target_entries_per_bin),
-                          "The target number of hash entries per bin for overlaps join");
   if (!dist_v5_) {
     help_desc.add_options()("port,p",
                             po::value<int>(&system_parameters.omnisci_server_port)
@@ -353,12 +204,6 @@ void CommandLineOptions::fillOptions() {
                           po::value<int>(&system_parameters.start_gpu)
                               ->default_value(system_parameters.start_gpu),
                           "First gpu to use.");
-  help_desc.add_options()("trivial-loop-join-threshold",
-                          po::value<unsigned>(&g_trivial_loop_join_threshold)
-                              ->default_value(g_trivial_loop_join_threshold)
-                              ->implicit_value(1000),
-                          "The maximum number of rows in the inner table of a loop join "
-                          "considered to be trivially small.");
   help_desc.add_options()("verbose",
                           po::value<bool>(&verbose_logging)
                               ->default_value(verbose_logging)
@@ -373,48 +218,7 @@ void CommandLineOptions::fillOptions() {
       "to the `register_runtime_udf` endpoint. For use with the Python Remote Backend "
       "Compiler server, packaged separately.");
   help_desc.add_options()("version,v", "Print Version Number.");
-  help_desc.add_options()("enable-experimental-string-functions",
-                          po::value<bool>(&g_enable_experimental_string_functions)
-                              ->default_value(g_enable_experimental_string_functions)
-                              ->implicit_value(true),
-                          "Enable experimental string functions.");
-  help_desc.add_options()(
-      "enable-fsi",
-      po::value<bool>(&g_enable_fsi)->default_value(g_enable_fsi)->implicit_value(true),
-      "Enable foreign storage interface.");
 
-#ifdef ENABLE_IMPORT_PARQUET
-  help_desc.add_options()("enable-parquet-import-fsi",
-                          po::value<bool>(&g_enable_parquet_import_fsi)
-                              ->default_value(g_enable_parquet_import_fsi)
-                              ->implicit_value(true),
-                          "Enable foreign storage interface based parquet import.");
-#endif
-
-#ifdef HAVE_AWS_S3
-  help_desc.add_options()(
-      "allow-s3-server-privileges",
-      po::value<bool>(&g_allow_s3_server_privileges)
-          ->default_value(g_allow_s3_server_privileges)
-          ->implicit_value(true),
-      "Allow S3 server privileges, if IAM user credentials are not provided. Credentials "
-      "may be specified with "
-      "environment variables (such as AWS_ACCESS_KEY_ID,  AWS_SECRET_ACCESS_KEY, etc), "
-      "an AWS credentials file, or when running on an EC2 instance, with an IAM role "
-      "that is attached to the instance.");
-#endif  // defined(HAVE_AWS_S3)
-  help_desc.add_options()(
-      "enable-interoperability",
-      po::value<bool>(&g_enable_interop)
-          ->default_value(g_enable_interop)
-          ->implicit_value(true),
-      "Enable offloading of query portions to an external execution engine.");
-  help_desc.add_options()("enable-union",
-                          po::value<bool>(&g_enable_union)
-                              ->default_value(g_enable_union)
-                              ->implicit_value(true),
-                          "DEPRECATED. UNION ALL is enabled by default. Please remove "
-                          "use of this option, as it may be disabled in the future.");
   help_desc.add_options()(
       "calcite-service-timeout",
       po::value<size_t>(&system_parameters.calcite_timeout)
@@ -452,12 +256,6 @@ void CommandLineOptions::fillOptions() {
       "allowed-export-paths",
       po::value<std::string>(&allowed_export_paths),
       "List of allowed root paths that can be used in export operations.");
-  help_desc.add_options()("enable-tiered-cpu-mem",
-                          po::value<bool>(&g_enable_tiered_cpu_mem)
-                              ->default_value(g_enable_tiered_cpu_mem)
-                              ->implicit_value(true),
-                          "Enable additional tiers of CPU memory (PMEM, etc...)");
-  help_desc.add_options()("pmem-size", po::value<size_t>(&g_pmem_size)->default_value(0));
 
   help_desc.add(log_options_.get_options());
 }
@@ -471,23 +269,6 @@ void CommandLineOptions::fillAdvancedOptions() {
           ->implicit_value(true),
       "Enable additional calcite (query plan) optimizations when a view is part of the "
       "query.");
-  developer_desc.add_options()(
-      "enable-columnar-output",
-      po::value<bool>(&g_enable_columnar_output)
-          ->default_value(g_enable_columnar_output)
-          ->implicit_value(true),
-      "Enable columnar output for intermediate/final query steps.");
-  developer_desc.add_options()(
-      "enable-left-join-filter-hoisting",
-      po::value<bool>(&g_enable_left_join_filter_hoisting)
-          ->default_value(g_enable_left_join_filter_hoisting)
-          ->implicit_value(true),
-      "Enable hoisting left hand side filters through left joins.");
-  developer_desc.add_options()("optimize-row-init",
-                               po::value<bool>(&g_optimize_row_initialization)
-                                   ->default_value(g_optimize_row_initialization)
-                                   ->implicit_value(true),
-                               "Optimize row initialization.");
   developer_desc.add_options()("enable-legacy-syntax",
                                po::value<bool>(&enable_legacy_syntax)
                                    ->default_value(enable_legacy_syntax)
@@ -499,44 +280,10 @@ void CommandLineOptions::fillAdvancedOptions() {
           ->default_value(allow_multifrag)
           ->implicit_value(true),
       "Enable execution over multiple fragments in a single round-trip to GPU.");
-  developer_desc.add_options()("enable-lazy-fetch",
-                               po::value<bool>(&g_enable_lazy_fetch)
-                                   ->default_value(g_enable_lazy_fetch)
-                                   ->implicit_value(true),
-                               "Enable lazy fetch columns in query results.");
-  developer_desc.add_options()(
-      "enable-shared-mem-group-by",
-      po::value<bool>(&g_enable_smem_group_by)
-          ->default_value(g_enable_smem_group_by)
-          ->implicit_value(true),
-      "Enable using GPU shared memory for some GROUP BY queries.");
   developer_desc.add_options()("num-executors",
                                po::value<int>(&system_parameters.num_executors)
                                    ->default_value(system_parameters.num_executors),
                                "Number of executors to run in parallel.");
-  developer_desc.add_options()(
-      "gpu-shared-mem-threshold",
-      po::value<size_t>(&g_gpu_smem_threshold)->default_value(g_gpu_smem_threshold),
-      "GPU shared memory threshold (in bytes). If query requires larger buffers than "
-      "this threshold, we disable those optimizations. 0 (default) means no static cap.");
-  developer_desc.add_options()(
-      "enable-shared-mem-grouped-non-count-agg",
-      po::value<bool>(&g_enable_smem_grouped_non_count_agg)
-          ->default_value(g_enable_smem_grouped_non_count_agg)
-          ->implicit_value(true),
-      "Enable using GPU shared memory for grouped non-count aggregate queries.");
-  developer_desc.add_options()(
-      "enable-shared-mem-non-grouped-agg",
-      po::value<bool>(&g_enable_smem_non_grouped_agg)
-          ->default_value(g_enable_smem_non_grouped_agg)
-          ->implicit_value(true),
-      "Enable using GPU shared memory for non-grouped aggregate queries.");
-  developer_desc.add_options()("enable-direct-columnarization",
-                               po::value<bool>(&g_enable_direct_columnarization)
-                                   ->default_value(g_enable_direct_columnarization)
-                                   ->implicit_value(true),
-                               "Enables/disables a more optimized columnarization method "
-                               "for intermediate steps in multi-step queries.");
   developer_desc.add_options()(
       "offset-device-by-table-id",
       po::value<bool>(&g_use_table_device_offset)
@@ -544,23 +291,6 @@ void CommandLineOptions::fillAdvancedOptions() {
           ->implicit_value(true),
       "Enables/disables offseting the chosen device ID by the table ID for a given "
       "fragment. This improves balance of fragments across GPUs.");
-  developer_desc.add_options()("enable-window-functions",
-                               po::value<bool>(&g_enable_window_functions)
-                                   ->default_value(g_enable_window_functions)
-                                   ->implicit_value(true),
-                               "Enable experimental window function support.");
-  developer_desc.add_options()(
-      "enable-parallel-window-partition-compute",
-      po::value<bool>(&g_enable_parallel_window_partition_compute)
-          ->default_value(g_enable_parallel_window_partition_compute)
-          ->implicit_value(true),
-      "Enable parallel window function partition computation.");
-  developer_desc.add_options()(
-      "enable-parallel-window-partition-sort",
-      po::value<bool>(&g_enable_parallel_window_partition_sort)
-          ->default_value(g_enable_parallel_window_partition_sort)
-          ->implicit_value(true),
-      "Enable parallel window function partition sorting.");
   developer_desc.add_options()("enable-table-functions",
                                po::value<bool>(&g_enable_table_functions)
                                    ->default_value(g_enable_table_functions)
@@ -579,30 +309,6 @@ void CommandLineOptions::fillAdvancedOptions() {
           ->default_value(intel_jit_profile)
           ->implicit_value(true),
       "Enable runtime support for the JIT code profiling using Intel VTune.");
-  developer_desc.add_options()(
-      "enable-cpu-sub-tasks",
-      po::value<bool>(&g_enable_cpu_sub_tasks)
-          ->default_value(g_enable_cpu_sub_tasks)
-          ->implicit_value(true),
-      "Enable parallel processing of a single data fragment on CPU. This can improve CPU "
-      "load balance and decrease reduction overhead.");
-  developer_desc.add_options()(
-      "cpu-sub-task-size",
-      po::value<size_t>(&g_cpu_sub_task_size)->default_value(g_cpu_sub_task_size),
-      "Set CPU sub-task size in rows.");
-  developer_desc.add_options()(
-      "skip-intermediate-count",
-      po::value<bool>(&g_skip_intermediate_count)
-          ->default_value(g_skip_intermediate_count)
-          ->implicit_value(true),
-      "Skip pre-flight counts for intermediate projections with no filters.");
-  developer_desc.add_options()(
-      "strip-join-covered-quals",
-      po::value<bool>(&g_strip_join_covered_quals)
-          ->default_value(g_strip_join_covered_quals)
-          ->implicit_value(true),
-      "Remove quals from the filtered count if they are covered by a "
-      "join condition (currently only ST_Contains).");
 
   developer_desc.add_options()(
       "min-cpu-slab-size",
@@ -630,43 +336,6 @@ void CommandLineOptions::fillAdvancedOptions() {
       "there is not enough free memory to accomodate the target slab size, smaller "
       "slabs will be allocated, down to the minimum size speified by "
       "min-gpu-slab-size.");
-
-  developer_desc.add_options()(
-      "max-output-projection-allocation-bytes",
-      po::value<size_t>(&g_max_memory_allocation_size)
-          ->default_value(g_max_memory_allocation_size),
-      "Maximum allocation size for a fixed output buffer allocation for projection "
-      "queries with no pre-flight count. Default is the maximum slab size (sizes "
-      "greater "
-      "than the maximum slab size have no affect). Requires bump allocator.");
-  developer_desc.add_options()(
-      "min-output-projection-allocation-bytes",
-      po::value<size_t>(&g_min_memory_allocation_size)
-          ->default_value(g_min_memory_allocation_size),
-      "Minimum allocation size for a fixed output buffer allocation for projection "
-      "queries with no pre-flight count. If an allocation of this size cannot be "
-      "obtained, the query will be retried with different execution parameters and/or "
-      "on "
-      "CPU (if allow-cpu-retry is enabled). Requires bump allocator.");
-  developer_desc.add_options()("enable-bump-allocator",
-                               po::value<bool>(&g_enable_bump_allocator)
-                                   ->default_value(g_enable_bump_allocator)
-                                   ->implicit_value(true),
-                               "Enable the bump allocator for projection queries on "
-                               "GPU. The bump allocator will "
-                               "allocate a fixed size buffer for each query, track the "
-                               "number of rows passing the "
-                               "kernel during query execution, and copy back only the "
-                               "rows that passed the kernel "
-                               "to CPU after execution. When disabled, pre-flight "
-                               "count queries are used to size "
-                               "the output buffer for projection queries.");
-  developer_desc.add_options()(
-      "code-cache-eviction-percent",
-      po::value<float>(&g_fraction_code_cache_to_evict)
-          ->default_value(g_fraction_code_cache_to_evict),
-      "Percentage of the GPU code cache to evict if an out of memory error is "
-      "encountered while attempting to place generated code on the GPU.");
 
   developer_desc.add_options()("ssl-cert",
                                po::value<std::string>(&system_parameters.ssl_cert_file)
@@ -749,13 +418,6 @@ void CommandLineOptions::fillAdvancedOptions() {
       "multiplying it by the number of count distinct expression and the size of bitmap "
       "required for each. For approx_count_distinct this is typically 8192 bytes.");
   developer_desc.add_options()(
-      "enable-filter-function",
-      po::value<bool>(&g_enable_filter_function)
-          ->default_value(g_enable_filter_function)
-          ->implicit_value(true),
-      "Enable the filter function protection feature for the SQL JIT compiler. "
-      "Normally should be on but techs might want to disable for troubleshooting.");
-  developer_desc.add_options()(
       "enable-idp-temporary-users",
       po::value<bool>(&g_enable_idp_temporary_users)
           ->default_value(g_enable_idp_temporary_users)
@@ -768,25 +430,6 @@ void CommandLineOptions::fillAdvancedOptions() {
           ->default_value(g_enable_calcite_ddl_parser)
           ->implicit_value(true),
       "Enable using Calcite for supported DDL parsing when available.");
-  developer_desc.add_options()(
-      "parallel-top-min",
-      po::value<size_t>(&g_parallel_top_min)->default_value(g_parallel_top_min),
-      "For ResultSets requiring a heap sort, the number of rows necessary to trigger "
-      "parallelTop() to sort.");
-  developer_desc.add_options()(
-      "parallel-top-max",
-      po::value<size_t>(&g_parallel_top_max)->default_value(g_parallel_top_max),
-      "For ResultSets requiring a heap sort, the maximum number of rows allowed by "
-      "watchdog.");
-  developer_desc.add_options()(
-      "streaming-top-n-max",
-      po::value<size_t>(&g_streaming_topn_max)->default_value(g_streaming_topn_max),
-      "The maximum number of rows allowing streaming top-N sorting.");
-  developer_desc.add_options()("enable-automatic-ir-metadata",
-                               po::value<bool>(&g_enable_automatic_ir_metadata)
-                                   ->default_value(g_enable_automatic_ir_metadata)
-                                   ->implicit_value(true),
-                               "Enable automatic IR metadata (debug builds only).");
   developer_desc.add_options()(
       "max-log-length",
       po::value<size_t>(&g_max_log_length)->default_value(g_max_log_length),
@@ -811,13 +454,6 @@ void CommandLineOptions::fillAdvancedOptions() {
           ->default_value(g_columnar_large_projections_threshold),
       "Threshold (in minimum number of rows) to prefer columnar output for projections. "
       "Requires --columnar-large-projections to be set.");
-
-  help_desc.add_options()(
-      "allow-query-step-cpu-retry",
-      po::value<bool>(&g_allow_query_step_cpu_retry)
-          ->default_value(g_allow_query_step_cpu_retry)
-          ->implicit_value(true),
-      R"(Allow certain query steps to retry on CPU, even when allow-cpu-retry is disabled)");
 }
 
 namespace {
@@ -909,7 +545,6 @@ void CommandLineOptions::validate() {
   if (vm.count("license-path")) {
     LOG(INFO) << "License key path set to '" << license_path << "'";
   }
-  g_read_only = read_only;
   LOG(INFO) << " Server read-only mode is " << read_only;
 #if DISABLE_CONCURRENCY
   LOG(INFO) << " Threading layer: serial";
@@ -941,14 +576,6 @@ void CommandLineOptions::validate() {
 
   LOG(INFO) << "Allowed import paths is set to " << allowed_import_paths;
   LOG(INFO) << "Allowed export paths is set to " << allowed_export_paths;
-
-  g_enable_s3_fsi = false;
-
-#ifdef ENABLE_IMPORT_PARQUET
-  if (g_enable_parquet_import_fsi) {
-    g_enable_fsi = true;  // a requirement for FSI parquet import is for FSI to be enabled
-  }
-#endif
 }
 
 boost::optional<int> CommandLineOptions::parse_command_line(
@@ -986,12 +613,6 @@ boost::optional<int> CommandLineOptions::parse_command_line(
       std::cout << "OmniSci Version: " << MAPD_RELEASE << std::endl;
       return 0;
     }
-    if (!g_enable_union) {
-      std::cerr
-          << "The enable-union option is DEPRECATED and is now enabled by default. "
-             "Please remove use of this option, as it may be disabled in the future."
-          << std::endl;
-    }
 
     if (vm.count("config")) {
       std::ifstream settings_file(system_parameters.config_file);
@@ -1027,35 +648,11 @@ boost::optional<int> CommandLineOptions::parse_command_line(
       return 1;
     }
 
-    g_enable_watchdog = enable_watchdog;
-    g_enable_dynamic_watchdog = enable_dynamic_watchdog;
-    g_dynamic_watchdog_time_limit = dynamic_watchdog_time_limit;
-    g_enable_runtime_query_interrupt = enable_runtime_query_interrupt;
-    g_enable_non_kernel_time_query_interrupt = enable_non_kernel_time_query_interrupt;
     g_pending_query_interrupt_freq = pending_query_interrupt_freq;
-    g_running_query_interrupt_freq = running_query_interrupt_freq;
-    g_use_estimator_result_cache = use_estimator_result_cache;
-    g_enable_data_recycler = enable_data_recycler;
-    g_use_hashtable_cache = use_hashtable_cache;
-    g_max_cacheable_hashtable_size_bytes = max_cacheable_hashtable_size_bytes;
-    g_hashtable_cache_total_bytes = hashtable_cache_total_bytes;
 
   } catch (po::error& e) {
     std::cerr << "Usage Error: " << e.what() << std::endl;
     return 1;
-  }
-
-  if (g_hll_precision_bits < 1 || g_hll_precision_bits > 16) {
-    std::cerr << "hll-precision-bits must be between 1 and 16." << std::endl;
-    return 1;
-  }
-
-  if (!g_from_table_reordering) {
-    LOG(INFO) << " From clause table reordering is disabled";
-  }
-
-  if (g_enable_filter_push_down) {
-    LOG(INFO) << " Filter push down for JOIN is enabled";
   }
 
   if (vm.count("udf")) {
@@ -1123,14 +720,6 @@ boost::optional<int> CommandLineOptions::parse_command_line(
     LOG(INFO) << " Master Port is " << system_parameters.master_port;
   }
 
-  if (g_max_import_threads < 1) {
-    std::cerr << "max-import-threads must be >= 1 (was set to " << g_max_import_threads
-              << ")." << std::endl;
-    return 8;
-  } else {
-    LOG(INFO) << " Max import threads " << g_max_import_threads;
-  }
-
   LOG(INFO) << " cuda block size " << system_parameters.cuda_block_size;
   LOG(INFO) << " cuda grid size  " << system_parameters.cuda_grid_size;
   LOG(INFO) << " Min CPU buffer pool slab size " << system_parameters.min_cpu_slab_size;
@@ -1144,21 +733,6 @@ boost::optional<int> CommandLineOptions::parse_command_line(
             << system_parameters.enable_calcite_view_optimize;
   LOG(INFO) << " Allow Local Auth Fallback: "
             << (authMetadata.allowLocalAuthFallback ? "enabled" : "disabled");
-  LOG(INFO) << " ParallelTop min threshold: " << g_parallel_top_min;
-  LOG(INFO) << " ParallelTop watchdog max: " << g_parallel_top_max;
-
-  LOG(INFO) << " Enable Data Recycler: "
-            << (g_enable_data_recycler ? "enabled" : "disabled");
-  if (g_enable_data_recycler) {
-    LOG(INFO) << " \t Use hashtable cache: "
-              << (g_use_hashtable_cache ? "enabled" : "disabled");
-    if (g_use_hashtable_cache) {
-      LOG(INFO) << " \t\t Total amount of bytes that hashtable cache keeps: "
-                << g_hashtable_cache_total_bytes / (1024 * 1024) << " MB.";
-      LOG(INFO) << " \t\t Per-hashtable size limit: "
-                << g_max_cacheable_hashtable_size_bytes / (1024 * 1024) << " MB.";
-    }
-  }
 
   boost::algorithm::trim_if(authMetadata.distinguishedName, boost::is_any_of("\"'"));
   boost::algorithm::trim_if(authMetadata.uri, boost::is_any_of("\"'"));

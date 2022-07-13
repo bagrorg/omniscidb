@@ -13,6 +13,7 @@
  */
 
 #include "ArrowSQLRunner.h"
+#include "RelAlgCache.h"
 
 #include "Calcite/CalciteJNI.h"
 #include "DataMgr/DataMgr.h"
@@ -21,23 +22,19 @@
 #include "QueryEngine/RelAlgExecutor.h"
 
 #include "SQLiteComparator.h"
-#include "SchemaJson.h"
 
 #include <gtest/gtest.h>
 
-extern bool g_enable_columnar_output;
-extern double g_gpu_mem_limit_percent;
-
 namespace TestHelpers::ArrowSQLRunner {
-
-bool g_hoist_literals = true;
 
 namespace {
 
 class ArrowSQLRunnerImpl {
  public:
-  static void init(size_t max_gpu_mem, const std::string& udf_filename) {
-    instance_.reset(new ArrowSQLRunnerImpl(max_gpu_mem, udf_filename));
+  static void init(ConfigPtr config,
+                   size_t max_gpu_mem,
+                   const std::string& udf_filename) {
+    instance_.reset(new ArrowSQLRunnerImpl(config, max_gpu_mem, udf_filename));
   }
 
   static void reset() { instance_.reset(); }
@@ -47,11 +44,11 @@ class ArrowSQLRunnerImpl {
     return instance_.get();
   }
 
+  Config& config() { return *config_; }
+
   bool gpusPresent() { return data_mgr_->gpusPresent(); }
 
   void printStats() {
-    std::cout << "Total schema to JSON time: " << (schema_to_json_time_ / 1000) << "ms."
-              << std::endl;
     std::cout << "Total Calcite parsing time: " << (calcite_time_ / 1000) << "ms."
               << std::endl;
     std::cout << "Total execution time: " << (execution_time_ / 1000) << "ms."
@@ -78,16 +75,10 @@ class ArrowSQLRunnerImpl {
   }
 
   std::string getSqlQueryRelAlg(const std::string& sql) {
-    std::string schema_json;
     std::string query_ra;
 
-    schema_to_json_time_ += measure<std::chrono::microseconds>::execution(
-        [&]() { schema_json = schema_to_json(storage_); });
-
-    calcite_time_ += measure<std::chrono::microseconds>::execution([&]() {
-      query_ra =
-          calcite_->process("admin", "test_db", pg_shim(sql), schema_json, {}, true);
-    });
+    calcite_time_ += measure<std::chrono::microseconds>::execution(
+        [&]() { query_ra = rel_alg_cache_->process("test_db", pg_shim(sql), {}, true); });
 
     return query_ra;
   }
@@ -95,13 +86,11 @@ class ArrowSQLRunnerImpl {
   std::unique_ptr<RelAlgExecutor> makeRelAlgExecutor(const std::string& sql) {
     std::string query_ra = getSqlQueryRelAlg(sql);
 
-    auto dag = std::make_unique<RelAlgDagBuilder>(query_ra, TEST_DB_ID, storage_);
+    auto dag =
+        std::make_unique<RelAlgDagBuilder>(query_ra, TEST_DB_ID, storage_, config_);
 
-    return std::make_unique<RelAlgExecutor>(executor_.get(),
-                                            TEST_DB_ID,
-                                            storage_,
-                                            data_mgr_->getDataProvider(),
-                                            std::move(dag));
+    return std::make_unique<RelAlgExecutor>(
+        executor_.get(), storage_, data_mgr_->getDataProvider(), std::move(dag));
   }
 
   ExecutionResult runSqlQuery(const std::string& sql,
@@ -120,7 +109,7 @@ class ArrowSQLRunnerImpl {
     auto ra_executor = makeRelAlgExecutor(query_str);
     auto query_hints =
         ra_executor->getParsedQueryHint(ra_executor->getRootRelAlgNodeShPtr().get());
-    return query_hints ? *query_hints : RegisteredQueryHint::defaults();
+    return query_hints ? *query_hints : RegisteredQueryHint::fromConfig(*config_);
   }
 
   std::optional<std::unordered_map<size_t, RegisteredQueryHint>> getParsedQueryHints(
@@ -143,7 +132,7 @@ class ArrowSQLRunnerImpl {
   }
 
   ExecutionOptions getExecutionOptions(bool allow_loop_joins, bool just_explain = false) {
-    return {g_enable_columnar_output,
+    return {config_->rs.enable_columnar_output,
             true,
             just_explain,
             allow_loop_joins,
@@ -154,14 +143,14 @@ class ArrowSQLRunnerImpl {
             10000,
             false,
             false,
-            g_gpu_mem_limit_percent,
+            config_->mem.gpu.input_mem_limit_percent,
             false,
             1000};
   }
 
   CompilationOptions getCompilationOptions(ExecutorDeviceType device_type) {
     auto co = CompilationOptions::defaults(device_type);
-    co.hoist_literals = g_hoist_literals;
+    co.hoist_literals = config_->exec.codegen.hoist_literals;
     return co;
   }
 
@@ -334,23 +323,34 @@ class ArrowSQLRunnerImpl {
     executor_.reset();
     data_mgr_.reset();
     calcite_.reset();
+    rel_alg_cache_.reset();
   }
 
  protected:
-  ArrowSQLRunnerImpl(size_t max_gpu_mem, const std::string& udf_filename) {
+  ArrowSQLRunnerImpl(ConfigPtr config,
+                     size_t max_gpu_mem,
+                     const std::string& udf_filename)
+      : config_(std::move(config)) {
+    if (!config_) {
+      config_ = std::make_shared<Config>();
+    }
+
     storage_ = std::make_shared<ArrowStorage>(TEST_SCHEMA_ID, "test", TEST_DB_ID);
 
-    std::unique_ptr<CudaMgr_Namespace::CudaMgr> cuda_mgr;
+    std::map<GpuMgrName, std::unique_ptr<GpuMgr>> gpu_mgrs;
     bool uses_gpu = false;
 #ifdef HAVE_CUDA
-    cuda_mgr = std::make_unique<CudaMgr_Namespace::CudaMgr>(-1, 0);
+    gpu_mgrs[GpuMgrName::CUDA] = std::make_unique<CudaMgr_Namespace::CudaMgr>(-1, 0);
+    uses_gpu = true;
+#elif HAVE_L0
+    gpu_mgrs[GpuMgrName::L0] = std::make_unique<l0::L0Manager>();
     uses_gpu = true;
 #endif
 
     SystemParameters system_parameters;
     system_parameters.gpu_buffer_mem_bytes = max_gpu_mem;
-    data_mgr_ =
-        std::make_shared<DataMgr>("", system_parameters, std::move(cuda_mgr), uses_gpu);
+    data_mgr_ = std::make_shared<DataMgr>(
+        *config_, system_parameters, std::move(gpu_mgrs), uses_gpu);
     auto* ps_mgr = data_mgr_->getPersistentStorageMgr();
     ps_mgr->registerDataProvider(TEST_SCHEMA_ID, storage_);
 
@@ -358,31 +358,40 @@ class ArrowSQLRunnerImpl {
         /*executor_id=*/0,
         data_mgr_.get(),
         data_mgr_->getBufferProvider(),
+        config_,
         "",
         "",
         system_parameters);
     executor_->setSchemaProvider(storage_);
-    executor_->setDatabaseId(TEST_DB_ID);
 
-    calcite_ = std::make_shared<CalciteJNI>(udf_filename, 1024);
-    ExtensionFunctionsWhitelist::add(calcite_->getExtensionFunctionWhitelist());
-    if (!udf_filename.empty()) {
-      ExtensionFunctionsWhitelist::addUdfs(calcite_->getUserDefinedFunctionWhitelist());
+    if (config_->debug.use_ra_cache.empty() || !config_->debug.build_ra_cache.empty()) {
+      calcite_ = std::make_shared<CalciteJNI>(storage_, config_, udf_filename, 1024);
+
+      if (config_->debug.use_ra_cache.empty()) {
+        ExtensionFunctionsWhitelist::add(calcite_->getExtensionFunctionWhitelist());
+        if (!udf_filename.empty()) {
+          ExtensionFunctionsWhitelist::addUdfs(
+              calcite_->getUserDefinedFunctionWhitelist());
+        }
+      }
+
+      table_functions::TableFunctionsFactory::init();
+      auto udtfs =
+          table_functions::TableFunctionsFactory::get_table_funcs(/*is_runtime=*/false);
+      std::vector<ExtensionFunction> udfs = {};
+      calcite_->setRuntimeExtensionFunctions(udfs, udtfs, /*is_runtime=*/false);
     }
 
-    table_functions::TableFunctionsFactory::init();
-    auto udtfs =
-        table_functions::TableFunctionsFactory::get_table_funcs(/*is_runtime=*/false);
-    std::vector<ExtensionFunction> udfs = {};
-    calcite_->setRuntimeExtensionFunctions(udfs, udtfs, /*is_runtime=*/false);
+    rel_alg_cache_ = std::make_shared<RelAlgCache>(calcite_, storage_, *config_);
   }
 
+  ConfigPtr config_;
   std::shared_ptr<DataMgr> data_mgr_;
   std::shared_ptr<ArrowStorage> storage_;
   std::shared_ptr<Executor> executor_;
   std::shared_ptr<CalciteJNI> calcite_;
+  std::shared_ptr<RelAlgCache> rel_alg_cache_;
   SQLiteComparator sqlite_comparator_;
-  int64_t schema_to_json_time_ = 0;
   int64_t calcite_time_ = 0;
   int64_t execution_time_ = 0;
 
@@ -393,12 +402,16 @@ std::unique_ptr<ArrowSQLRunnerImpl> ArrowSQLRunnerImpl::instance_;
 
 }  // namespace
 
-void init(size_t max_gpu_mem, const std::string& udf_filename) {
-  ArrowSQLRunnerImpl::init(max_gpu_mem, udf_filename);
+void init(ConfigPtr config, size_t max_gpu_mem, const std::string& udf_filename) {
+  ArrowSQLRunnerImpl::init(config, max_gpu_mem, udf_filename);
 }
 
 void reset() {
   ArrowSQLRunnerImpl::reset();
+}
+
+Config& config() {
+  return ArrowSQLRunnerImpl::get()->config();
 }
 
 bool gpusPresent() {

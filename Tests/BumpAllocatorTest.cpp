@@ -25,11 +25,6 @@
 using namespace TestHelpers;
 using namespace TestHelpers::ArrowSQLRunner;
 
-extern bool g_allow_cpu_retry;
-extern size_t g_max_memory_allocation_size;
-extern size_t g_min_memory_allocation_size;
-extern bool g_enable_bump_allocator;
-
 namespace {
 
 size_t g_num_gpus{0};
@@ -63,7 +58,9 @@ GpuInfo get_gpu_info() {
 }
 
 bool setup() {
-  init(/*max_gpu_mem=*/1000000000);
+  auto config = std::make_shared<Config>();
+  config->mem.gpu.enable_bump_allocator = true;
+  init(config, /*max_gpu_mem=*/1000000000);
 
   if (!gpusPresent()) {
     LOG(WARNING) << "No GPUs detected. Skipping all Bump Allocator tests.";
@@ -90,19 +87,19 @@ class LowGpuBufferMemory : public ::testing::Test {
     insertCsvValues("test", ss.str());
 
     // Min memory allocation size set to 2GB to guarantee OOM during allocation
-    min_mem_allocation_state_ = g_min_memory_allocation_size;
-    g_min_memory_allocation_size = 2000000000;
+    min_mem_allocation_state_ = config().mem.gpu.min_memory_allocation_size;
+    config().mem.gpu.min_memory_allocation_size = 2000000000;
 
     // CPU retry off to disable automatic punt to CPU
-    allow_cpu_retry_state_ = g_allow_cpu_retry;
-    g_allow_cpu_retry = false;
+    allow_cpu_retry_state_ = config().exec.heterogeneous.allow_cpu_retry;
+    config().exec.heterogeneous.allow_cpu_retry = false;
   }
 
   void TearDown() override {
     dropTable("test");
 
-    g_min_memory_allocation_size = min_mem_allocation_state_;
-    g_allow_cpu_retry = allow_cpu_retry_state_;
+    config().mem.gpu.min_memory_allocation_size = min_mem_allocation_state_;
+    config().exec.heterogeneous.allow_cpu_retry = allow_cpu_retry_state_;
   }
 
  private:
@@ -145,19 +142,19 @@ class LowGpuBufferMemoryCpuRetry : public ::testing::Test {
     insertCsvValues("test", ss.str());
 
     // Min memory allocation size set to 2GB to guarantee OOM during allocation
-    min_mem_allocation_state_ = g_min_memory_allocation_size;
-    g_min_memory_allocation_size = 2000000000;
+    min_mem_allocation_state_ = config().mem.gpu.min_memory_allocation_size;
+    config().mem.gpu.min_memory_allocation_size = 2000000000;
 
     // allow CPU retry on
-    allow_cpu_retry_state_ = g_allow_cpu_retry;
-    g_allow_cpu_retry = true;
+    allow_cpu_retry_state_ = config().exec.heterogeneous.allow_cpu_retry;
+    config().exec.heterogeneous.allow_cpu_retry = true;
   }
 
   void TearDown() override {
     dropTable("test");
 
-    g_min_memory_allocation_size = min_mem_allocation_state_;
-    g_allow_cpu_retry = allow_cpu_retry_state_;
+    config().mem.gpu.min_memory_allocation_size = min_mem_allocation_state_;
+    config().exec.heterogeneous.allow_cpu_retry = allow_cpu_retry_state_;
   }
 
  private:
@@ -190,20 +187,20 @@ class MediumGpuBufferMemory : public ::testing::Test {
     }
     insertCsvValues("test", ss.str());
 
-    max_mem_allocation_state_ = g_max_memory_allocation_size;
-    g_max_memory_allocation_size = 512;
+    max_mem_allocation_state_ = config().mem.gpu.max_memory_allocation_size;
+    config().mem.gpu.max_memory_allocation_size = 512;
 
     // CPU retry off to disable automatic punt to CPU
-    allow_cpu_retry_state_ = g_allow_cpu_retry;
-    g_allow_cpu_retry = false;
+    allow_cpu_retry_state_ = config().exec.heterogeneous.allow_cpu_retry;
+    config().exec.heterogeneous.allow_cpu_retry = false;
   }
 
   void TearDown() override {
     dropTable("test");
 
-    g_max_memory_allocation_size = max_mem_allocation_state_;
+    config().mem.gpu.max_memory_allocation_size = max_mem_allocation_state_;
 
-    g_allow_cpu_retry = allow_cpu_retry_state_;
+    config().exec.heterogeneous.allow_cpu_retry = allow_cpu_retry_state_;
   }
 
  private:
@@ -252,8 +249,6 @@ int main(int argc, char** argv) {
   }
 
   logger::init(log_options);
-
-  g_enable_bump_allocator = true;
 
   if (!setup()) {
     // No GPUs detected, bypass the test

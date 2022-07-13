@@ -32,8 +32,6 @@
 #include <ctime>
 #include <sstream>
 
-extern bool g_skip_intermediate_count;
-
 enum class MergeType { Union, Reduce };
 
 struct QueryStepExecutionResult {
@@ -48,12 +46,10 @@ class RelAlgExecutor {
   using TargetInfoList = std::vector<TargetInfo>;
 
   RelAlgExecutor(Executor* executor,
-                 int db_id,
                  SchemaProviderPtr schema_provider,
                  DataProvider* data_provider);
 
   RelAlgExecutor(Executor* executor,
-                 int db_id,
                  SchemaProviderPtr schema_provider,
                  DataProvider* data_provider,
                  std::unique_ptr<RelAlgDag> query_dag);
@@ -279,7 +275,7 @@ class RelAlgExecutor {
 
   // Allows an out of memory error through if CPU retry is enabled. Otherwise, throws an
   // appropriate exception corresponding to the query error code.
-  static void handlePersistentError(const int32_t error_code);
+  void handlePersistentError(const int32_t error_code);
 
   WorkUnit createWorkUnit(const RelAlgNode*, const SortInfo&, const ExecutionOptions& eo);
 
@@ -345,10 +341,10 @@ class RelAlgExecutor {
       const bool just_explain) const;
 
   Executor* executor_;
-  int db_id_;
   std::unique_ptr<RelAlgDag> query_dag_;
   std::shared_ptr<SchemaProvider> schema_provider_;
   DataProvider* data_provider_;
+  const Config& config_;
   TemporaryTables temporary_tables_;
   time_t now_;
   std::unordered_map<unsigned, JoinQualsPerNestingLevel> left_deep_join_info_;

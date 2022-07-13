@@ -15,7 +15,7 @@
  */
 
 #include "GpuMemUtils.h"
-#include "DataMgr/Allocators/CudaAllocator.h"
+#include "DataMgr/Allocators/GpuAllocator.h"
 #include "GpuInitGroups.h"
 #include "Logger/Logger.h"
 #include "StreamingTopN.h"
@@ -25,9 +25,28 @@
 
 #include <vector>
 
-extern size_t g_max_memory_allocation_size;
-extern size_t g_min_memory_allocation_size;
-extern double g_bump_allocator_step_reduction;
+void copy_to_nvidia_gpu(Data_Namespace::DataMgr* data_mgr,
+
+                        CUdeviceptr dst,
+
+                        const void* src,
+
+                        const size_t num_bytes,
+
+                        const int device_id) {
+#ifdef HAVE_CUDA
+  if (!data_mgr) {  // only for unit tests
+    cuMemcpyHtoD(dst, src, num_bytes);
+    return;
+  }
+#endif  // HAVE_CUDA
+  const auto cuda_mgr = data_mgr->getCudaMgr();
+  CHECK(cuda_mgr);
+  cuda_mgr->copyHostToDevice(reinterpret_cast<int8_t*>(dst),
+                             static_cast<const int8_t*>(src),
+                             num_bytes,
+                             device_id);
+}
 
 namespace {
 
@@ -42,6 +61,7 @@ inline size_t coalesced_size(const QueryMemoryDescriptor& query_mem_desc,
 
 GpuGroupByBuffers create_dev_group_by_buffers(
     DeviceAllocator* cuda_allocator,
+    const Config& config,
     const std::vector<int64_t*>& group_by_buffers,
     const QueryMemoryDescriptor& query_mem_desc,
     const unsigned block_size_x,
@@ -88,7 +108,7 @@ GpuGroupByBuffers create_dev_group_by_buffers(
       // memory remaining on the device. This may have the side effect of evicting
       // memory allocated for previous queries. However, at current maximum slab sizes
       // (2GB) we expect these effects to be minimal.
-      size_t max_memory_size{g_max_memory_allocation_size};
+      size_t max_memory_size{config.mem.gpu.max_memory_allocation_size};
       while (true) {
         entry_count = max_memory_size / query_mem_desc.getRowSize();
         groups_buffer_size =
@@ -104,8 +124,9 @@ GpuGroupByBuffers create_dev_group_by_buffers(
               reinterpret_cast<CUdeviceptr>(cuda_allocator->alloc(mem_size));
         } catch (const OutOfMemory& e) {
           LOG(WARNING) << e.what();
-          max_memory_size = max_memory_size * g_bump_allocator_step_reduction;
-          if (max_memory_size < g_min_memory_allocation_size) {
+          max_memory_size =
+              max_memory_size * config.mem.gpu.bump_allocator_step_reduction;
+          if (max_memory_size < config.mem.gpu.min_memory_allocation_size) {
             throw;
           }
 

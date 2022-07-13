@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <blosc.h>
 #include <cstddef>
 
 #include <boost/algorithm/string.hpp>
@@ -58,14 +57,6 @@ class CommandLineOptions {
   AuthMetadata authMetadata;
 
   SystemParameters system_parameters;
-  bool enable_rendering = false;
-  bool enable_auto_clear_render_mem = false;
-  int render_oom_retry_threshold = 0;  // in milliseconds
-  size_t render_mem_bytes = 1000000000;
-  size_t max_concurrent_render_sessions = 500;
-  bool render_compositor_use_last_gpu = true;
-  bool renderer_use_vulkan_driver = false;
-
   bool enable_runtime_udf = false;
 
   bool enable_watchdog = true;
@@ -114,8 +105,6 @@ class CommandLineOptions {
   void fillOptions();
   void fillAdvancedOptions();
 
-  std::string compressor = std::string(BLOSC_LZ4HC_COMPNAME);
-
   po::options_description help_desc;
   po::options_description developer_desc;
   logger::LogOptions log_options_;
@@ -138,76 +127,7 @@ class CommandLineOptions {
   const bool dist_v5_;
 };
 
-extern bool g_enable_watchdog;
-extern bool g_enable_dynamic_watchdog;
-extern unsigned g_dynamic_watchdog_time_limit;
-extern unsigned g_trivial_loop_join_threshold;
-extern bool g_from_table_reordering;
-extern bool g_enable_filter_push_down;
-extern bool g_allow_cpu_retry;
-extern bool g_allow_query_step_cpu_retry;
-extern bool g_inf_div_by_zero;
-extern bool g_null_div_by_zero;
-extern bool g_bigint_count;
-extern bool g_inner_join_fragment_skipping;
-extern float g_filter_push_down_low_frac;
-extern float g_filter_push_down_high_frac;
-extern size_t g_filter_push_down_passing_row_ubound;
-extern bool g_enable_columnar_output;
-extern bool g_optimize_row_initialization;
-extern bool g_enable_overlaps_hashjoin;
-extern bool g_enable_hashjoin_many_to_many;
-extern bool g_enable_distance_rangejoin;
-extern size_t g_overlaps_max_table_size_bytes;
-extern double g_overlaps_target_entries_per_bin;
-extern bool g_strip_join_covered_quals;
-extern size_t g_constrained_by_in_threshold;
-extern size_t g_big_group_threshold;
-extern bool g_enable_window_functions;
-extern bool g_enable_parallel_window_partition_compute;
-extern bool g_enable_parallel_window_partition_sort;
 extern bool g_enable_table_functions;
-extern size_t g_max_memory_allocation_size;
-extern double g_bump_allocator_step_reduction;
-extern bool g_enable_direct_columnarization;
-extern bool g_enable_runtime_query_interrupt;
 extern unsigned g_pending_query_interrupt_freq;
-extern double g_running_query_interrupt_freq;
-extern bool g_enable_non_kernel_time_query_interrupt;
-extern size_t g_gpu_smem_threshold;
-extern bool g_enable_smem_non_grouped_agg;
-extern bool g_enable_smem_grouped_non_count_agg;
-extern bool g_use_estimator_result_cache;
-extern bool g_enable_lazy_fetch;
-extern bool g_enable_multifrag_rs;
-extern bool g_enable_heterogeneous_execution;
 
-extern int64_t g_omni_kafka_seek;
-extern size_t g_compression_limit_bytes;
-extern bool g_skip_intermediate_count;
-extern bool g_enable_bump_allocator;
-extern size_t g_max_memory_allocation_size;
-extern size_t g_min_memory_allocation_size;
-extern bool g_enable_experimental_string_functions;
-extern bool g_enable_fsi;
-extern bool g_enable_s3_fsi;
-#ifdef ENABLE_IMPORT_PARQUET
-extern bool g_enable_parquet_import_fsi;
-#endif
-extern bool g_enable_interop;
-extern bool g_enable_union;
-extern bool g_enable_cpu_sub_tasks;
-extern size_t g_cpu_sub_task_size;
-extern bool g_enable_filter_function;
-extern size_t g_max_import_threads;
-extern bool g_allow_s3_server_privileges;
-extern bool g_read_only;
-extern bool g_enable_automatic_ir_metadata;
-extern size_t g_enable_parallel_linearization;
 extern size_t g_max_log_length;
-extern bool g_enable_tiered_cpu_mem;
-extern size_t g_pmem_size;
-extern bool g_enable_data_recycler;
-extern bool g_use_hashtable_cache;
-extern size_t g_hashtable_cache_total_bytes;
-extern size_t g_max_cacheable_hashtable_size_bytes;

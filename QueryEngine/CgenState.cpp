@@ -40,6 +40,7 @@ CgenState::CgenState(const size_t num_query_infos,
     , contains_left_deep_outer_join_(contains_left_deep_outer_join)
     , outer_join_match_found_per_level_(std::max(num_query_infos, size_t(1)) - 1)
     , needs_error_check_(false)
+    , automatic_ir_metadata_(executor->getConfig().debug.enable_automatic_ir_metadata)
     , query_func_(nullptr)
     , query_func_entry_ir_builder_(context_){};
 
@@ -51,7 +52,7 @@ CgenState::CgenState(const size_t num_query_infos,
           contains_left_deep_outer_join,
           Executor::getExecutor(Executor::UNITARY_EXECUTOR_ID, nullptr, nullptr).get()) {}
 
-CgenState::CgenState(llvm::LLVMContext& context)
+CgenState::CgenState(const Config& config, llvm::LLVMContext& context)
     : executor_id_(Executor::INVALID_EXECUTOR_ID)
     , module_(nullptr)
     , row_func_(nullptr)
@@ -59,6 +60,7 @@ CgenState::CgenState(llvm::LLVMContext& context)
     , ir_builder_(context_)
     , contains_left_deep_outer_join_(false)
     , needs_error_check_(false)
+    , automatic_ir_metadata_(config.debug.enable_automatic_ir_metadata)
     , query_func_(nullptr)
     , query_func_entry_ir_builder_(context_){};
 
@@ -259,7 +261,7 @@ struct GpuFunctionDefinition {
 
   virtual ~GpuFunctionDefinition() = default;
 
-  virtual llvm::FunctionCallee getFunction(llvm::Module* module,
+  virtual llvm::FunctionCallee getFunction(llvm::Module* llvm_module,
                                            llvm::LLVMContext& context) const = 0;
 };
 
@@ -268,9 +270,9 @@ template <typename... TYPES>
 struct GpuFunction final : public GpuFunctionDefinition {
   GpuFunction(char const* name) : GpuFunctionDefinition(name) {}
 
-  llvm::FunctionCallee getFunction(llvm::Module* module,
+  llvm::FunctionCallee getFunction(llvm::Module* llvm_module,
                                    llvm::LLVMContext& context) const {
-    return module->getOrInsertFunction(name_, getTy<TYPES>(context)...);
+    return llvm_module->getOrInsertFunction(name_, getTy<TYPES>(context)...);
   }
 };
 
@@ -368,10 +370,10 @@ llvm::LLVMContext& CgenState::getExecutorContext() const {
   return getExecutor()->getContext();
 }
 
-void CgenState::set_module_shallow_copy(const std::unique_ptr<llvm::Module>& module,
+void CgenState::set_module_shallow_copy(const std::unique_ptr<llvm::Module>& llvm_module,
                                         bool always_clone) {
   module_ =
-      llvm::CloneModule(*module, vmap_, [always_clone](const llvm::GlobalValue* gv) {
+      llvm::CloneModule(*llvm_module, vmap_, [always_clone](const llvm::GlobalValue* gv) {
         auto func = llvm::dyn_cast<llvm::Function>(gv);
         if (!func) {
           return true;

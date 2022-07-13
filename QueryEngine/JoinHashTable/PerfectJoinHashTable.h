@@ -120,15 +120,15 @@ class PerfectJoinHashTable : public HashJoin {
     };
   }
 
+  static void initCaches(ConfigPtr config);
+
   virtual ~PerfectJoinHashTable() {}
 
  private:
-  // We don't want to create JoinHashTable for big ranges
-  // with small number of valid entries. Therefore we
-  // define the minimal load level (in percent).
-  static constexpr size_t huge_join_hash_min_load_ = 10;
-
   // Equijoin API
+  bool isOneToOneHashPossible(
+      const std::vector<ColumnsForDevice>& columns_per_device) const;
+
   ColumnsForDevice fetchColumnsForDevice(const std::vector<FragmentInfo>& fragments,
                                          const int device_id,
                                          DeviceAllocator* dev_buff_owner);
@@ -158,6 +158,7 @@ class PerfectJoinHashTable : public HashJoin {
                        const JoinType join_type,
                        const HashType preferred_hash_type,
                        const ExpressionRange& col_range,
+                       const ExpressionRange& rhs_source_col_range,
                        DataProvider* data_provider,
                        ColumnCacheMap& column_cache,
                        Executor* executor,
@@ -173,6 +174,7 @@ class PerfectJoinHashTable : public HashJoin {
       , memory_level_(memory_level)
       , hash_type_(preferred_hash_type)
       , col_range_(col_range)
+      , rhs_source_col_range_(rhs_source_col_range)
       , executor_(executor)
       , column_cache_(column_cache)
       , device_count_(device_count)
@@ -250,6 +252,7 @@ class PerfectJoinHashTable : public HashJoin {
   std::mutex str_proxy_translation_mutex_;
   const StringDictionaryProxy::IdMap* str_proxy_translation_map_{nullptr};
   ExpressionRange col_range_;
+  ExpressionRange rhs_source_col_range_;
   Executor* executor_;
   ColumnCacheMap& column_cache_;
   const int device_count_;
@@ -260,6 +263,7 @@ class PerfectJoinHashTable : public HashJoin {
 
   static std::unique_ptr<HashtableRecycler> hash_table_cache_;
   static std::unique_ptr<HashingSchemeRecycler> hash_table_layout_cache_;
+  static std::once_flag init_caches_flag_;
 };
 
 bool needs_dictionary_translation(const Analyzer::ColumnVar* inner_col,

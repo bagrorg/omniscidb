@@ -21,9 +21,7 @@
 
 #include <boost/algorithm/string.hpp>
 
-extern bool g_enable_columnar_output;
-extern size_t g_overlaps_max_table_size_bytes;
-extern double g_overlaps_target_entries_per_bin;
+#include "Shared/Config.h"
 
 // we expect query hint enum val starts with zero,
 // and let remaining enum value to be auto-incremented
@@ -31,11 +29,6 @@ enum QueryHint {
   kCpuMode = 0,
   kColumnarOutput,
   kRowwiseOutput,
-  kOverlapsBucketThreshold,
-  kOverlapsMaxSize,
-  kOverlapsAllowGpuBuild,
-  kOverlapsNoCache,
-  kOverlapsKeysPerBin,
   kHintCount,   // should be at the last elem before INVALID enum value to count #
                 // supported hints correctly
   kInvalidHint  // this should be the last elem of this enum
@@ -44,12 +37,7 @@ enum QueryHint {
 static const std::unordered_map<std::string, QueryHint> SupportedQueryHints = {
     {"cpu_mode", QueryHint::kCpuMode},
     {"columnar_output", QueryHint::kColumnarOutput},
-    {"rowwise_output", QueryHint::kRowwiseOutput},
-    {"overlaps_bucket_threshold", QueryHint::kOverlapsBucketThreshold},
-    {"overlaps_max_size", QueryHint::kOverlapsMaxSize},
-    {"overlaps_allow_gpu_build", QueryHint::kOverlapsAllowGpuBuild},
-    {"overlaps_no_cache", QueryHint::kOverlapsNoCache},
-    {"overlaps_keys_per_bin", QueryHint::kOverlapsKeysPerBin}};
+    {"rowwise_output", QueryHint::kRowwiseOutput}};
 
 class ExplainedQueryHint {
   // this class represents parsed query hint's specification
@@ -136,26 +124,16 @@ struct RegisteredQueryHint {
   // and we get all necessary info from it and organize it into "RegisteredQueryHint"
   // so by using "RegisteredQueryHint", we can know and access which query hint is
   // registered and its detailed info such as the hint's parameter values given by user
-  RegisteredQueryHint()
+  RegisteredQueryHint(bool enable_columnar_output)
       : cpu_mode(false)
-      , columnar_output(g_enable_columnar_output)
-      , rowwise_output(!g_enable_columnar_output)
-      , overlaps_bucket_threshold(std::numeric_limits<double>::max())
-      , overlaps_max_size(g_overlaps_max_table_size_bytes)
-      , overlaps_allow_gpu_build(true)
-      , overlaps_no_cache(false)
-      , overlaps_keys_per_bin(g_overlaps_target_entries_per_bin)
+      , columnar_output(enable_columnar_output)
+      , rowwise_output(!enable_columnar_output)
       , registered_hint(QueryHint::kHintCount, false) {}
 
   RegisteredQueryHint& operator=(const RegisteredQueryHint& other) {
     cpu_mode = other.cpu_mode;
     columnar_output = other.columnar_output;
     rowwise_output = other.rowwise_output;
-    overlaps_bucket_threshold = other.overlaps_bucket_threshold;
-    overlaps_max_size = other.overlaps_max_size;
-    overlaps_allow_gpu_build = other.overlaps_allow_gpu_build;
-    overlaps_no_cache = other.overlaps_no_cache;
-    overlaps_keys_per_bin = other.overlaps_keys_per_bin;
     registered_hint = other.registered_hint;
     return *this;
   }
@@ -164,11 +142,6 @@ struct RegisteredQueryHint {
     cpu_mode = other.cpu_mode;
     columnar_output = other.columnar_output;
     rowwise_output = other.rowwise_output;
-    overlaps_bucket_threshold = other.overlaps_bucket_threshold;
-    overlaps_max_size = other.overlaps_max_size;
-    overlaps_allow_gpu_build = other.overlaps_allow_gpu_build;
-    overlaps_no_cache = other.overlaps_no_cache;
-    overlaps_keys_per_bin = other.overlaps_keys_per_bin;
     registered_hint = other.registered_hint;
   }
 
@@ -177,16 +150,11 @@ struct RegisteredQueryHint {
   bool columnar_output;
   bool rowwise_output;
 
-  // overlaps hash join
-  double overlaps_bucket_threshold;  // defined in "OverlapsJoinHashTable.h"
-  size_t overlaps_max_size;
-  bool overlaps_allow_gpu_build;
-  bool overlaps_no_cache;
-  double overlaps_keys_per_bin;
-
   std::vector<bool> registered_hint;
 
-  static RegisteredQueryHint defaults() { return RegisteredQueryHint(); }
+  static RegisteredQueryHint fromConfig(const Config& config) {
+    return RegisteredQueryHint(config.rs.enable_columnar_output);
+  }
 
  public:
   static QueryHint translateQueryHint(const std::string& hint_name) {

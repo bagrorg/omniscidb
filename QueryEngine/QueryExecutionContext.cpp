@@ -24,14 +24,9 @@
 #include "QueryMemoryInitializer.h"
 #include "RelAlgExecutionUnit.h"
 #include "ResultSet.h"
-#include "Shared/Globals.h"
 #include "Shared/likely.h"
 #include "SpeculativeTopN.h"
 #include "StreamingTopN.h"
-
-extern bool g_enable_non_kernel_time_query_interrupt;
-extern bool g_enable_dynamic_watchdog;
-extern unsigned g_dynamic_watchdog_time_limit;
 
 QueryExecutionContext::QueryExecutionContext(
     const RelAlgExecutionUnit& ra_exe_unit,
@@ -57,7 +52,7 @@ QueryExecutionContext::QueryExecutionContext(
   CHECK(executor);
   if (device_type == ExecutorDeviceType::GPU) {
     gpu_allocator_ =
-        std::make_unique<CudaAllocator>(executor->getBufferProvider(), device_id);
+        std::make_unique<GpuAllocator>(executor->getBufferProvider(), device_id);
   }
 
   query_buffers_ = std::make_unique<QueryMemoryInitializer>(ra_exe_unit,
@@ -98,7 +93,6 @@ ResultSetPtr QueryExecutionContext::groupBufferToDeinterleavedResults(
                                   row_set_mem_owner_,
                                   executor_->getDataMgr(),
                                   executor_->getBufferProvider(),
-                                  executor_->getDatabaseId(),
                                   executor_->blockSize(),
                                   executor_->gridSize());
   auto deinterleaved_storage =
@@ -126,7 +120,7 @@ ResultSetPtr QueryExecutionContext::groupBufferToDeinterleavedResults(
       deinterleaved_buffer[deinterleaved_buffer_idx] = agg_vals[agg_idx];
     }
   };
-  if (g_enable_non_kernel_time_query_interrupt) {
+  if (executor_->getConfig().exec.interrupt.enable_non_kernel_time_query_interrupt) {
     for (size_t bin_base_off = query_mem_desc_.getColOffInBytes(0), bin_idx = 0;
          bin_idx < result_set->entryCount();
          ++bin_idx, bin_base_off += query_mem_desc_.getColOffInBytesInNextBin(0)) {
@@ -249,11 +243,11 @@ std::vector<int64_t*> QueryExecutionContext::launchGpuCode(
   cuEventCreate(&start2, 0);
   cuEventCreate(&stop2, 0);
 
-  if (g_enable_dynamic_watchdog || (allow_runtime_interrupt)) {
+  if (executor_->getConfig().exec.watchdog.enable_dynamic || (allow_runtime_interrupt)) {
     cuEventRecord(start0, 0);
   }
 
-  if (g_enable_dynamic_watchdog) {
+  if (executor_->getConfig().exec.watchdog.enable_dynamic) {
     initializeDynamicWatchdog(native_code.second, device_id);
   }
 
@@ -291,6 +285,7 @@ std::vector<int64_t*> QueryExecutionContext::launchGpuCode(
     auto gpu_group_by_buffers =
         query_buffers_->createAndInitializeGroupByBufferGpu(ra_exe_unit,
                                                             query_mem_desc_,
+                                                            executor_->getConfig(),
                                                             kernel_params[INIT_AGG_VALS],
                                                             device_id,
                                                             dispatch_mode_,
@@ -311,7 +306,7 @@ std::vector<int64_t*> QueryExecutionContext::launchGpuCode(
       param_ptrs.push_back(&param);
     }
 
-    if (g_enable_dynamic_watchdog || allow_runtime_interrupt) {
+    if (executor_->getConfig().exec.watchdog.enable_dynamic || allow_runtime_interrupt) {
       cuEventRecord(stop0, 0);
       cuEventSynchronize(stop0);
       float milliseconds0 = 0;
@@ -348,7 +343,7 @@ std::vector<int64_t*> QueryExecutionContext::launchGpuCode(
                                      &param_ptrs[0],
                                      nullptr));
     }
-    if (g_enable_dynamic_watchdog || allow_runtime_interrupt) {
+    if (executor_->getConfig().exec.watchdog.enable_dynamic || allow_runtime_interrupt) {
       executor_->registerActiveModule(native_code.second, device_id);
       cuEventRecord(stop1, 0);
       cuEventSynchronize(stop1);
@@ -370,12 +365,14 @@ std::vector<int64_t*> QueryExecutionContext::launchGpuCode(
     }
 
     if (query_mem_desc_.useStreamingTopN()) {
-      query_buffers_->applyStreamingTopNOffsetGpu(buffer_provider,
-                                                  query_mem_desc_,
-                                                  gpu_group_by_buffers,
-                                                  ra_exe_unit,
-                                                  total_thread_count,
-                                                  device_id);
+      query_buffers_->applyStreamingTopNOffsetGpu(
+          buffer_provider,
+          query_mem_desc_,
+          gpu_group_by_buffers,
+          ra_exe_unit,
+          total_thread_count,
+          device_id,
+          executor_->getConfig().exec.group_by.bigint_count);
     } else {
       if (use_speculative_top_n(ra_exe_unit, query_mem_desc_)) {
         try {
@@ -454,8 +451,7 @@ std::vector<int64_t*> QueryExecutionContext::launchGpuCode(
                                                 ExecutorDeviceType::GPU,
                                                 device_id,
                                                 data_mgr,
-                                                buffer_provider,
-                                                -1 /*FIXME*/));
+                                                buffer_provider));
       out_vec_dev_buffers.push_back(reinterpret_cast<CUdeviceptr>(
           estimator_result_set_->getDeviceEstimatorBuffer()));
     } else {
@@ -483,7 +479,8 @@ std::vector<int64_t*> QueryExecutionContext::launchGpuCode(
       param_ptrs.push_back(&param);
     }
 
-    if (g_enable_dynamic_watchdog || (allow_runtime_interrupt)) {
+    if (executor_->getConfig().exec.watchdog.enable_dynamic ||
+        (allow_runtime_interrupt)) {
       cuEventRecord(stop0, 0);
       cuEventSynchronize(stop0);
       float milliseconds0 = 0;
@@ -520,7 +517,7 @@ std::vector<int64_t*> QueryExecutionContext::launchGpuCode(
                                      nullptr));
     }
 
-    if (g_enable_dynamic_watchdog || allow_runtime_interrupt) {
+    if (executor_->getConfig().exec.watchdog.enable_dynamic || allow_runtime_interrupt) {
       executor_->registerActiveModule(native_code.second, device_id);
       cuEventRecord(stop1, 0);
       cuEventSynchronize(stop1);
@@ -579,7 +576,7 @@ std::vector<int64_t*> QueryExecutionContext::launchGpuCode(
         device_id);
   }
 
-  if (g_enable_dynamic_watchdog || allow_runtime_interrupt) {
+  if (executor_->getConfig().exec.watchdog.enable_dynamic || allow_runtime_interrupt) {
     cuEventRecord(stop2, 0);
     cuEventSynchronize(stop2);
     float milliseconds2 = 0;
@@ -630,7 +627,7 @@ std::vector<int64_t*> QueryExecutionContext::launchCpuCode(
     // result set.
     if (!estimator_result_set_) {
       estimator_result_set_.reset(new ResultSet(
-          ra_exe_unit.estimator, ExecutorDeviceType::CPU, 0, nullptr, nullptr, -1));
+          ra_exe_unit.estimator, ExecutorDeviceType::CPU, 0, nullptr, nullptr));
     }
     out_vec.push_back(
         reinterpret_cast<int64_t*>(estimator_result_set_->getHostEstimatorBuffer()));
@@ -790,10 +787,11 @@ void QueryExecutionContext::initializeDynamicWatchdog(void* native_module,
   CUdeviceptr dw_cycle_budget;
   size_t dw_cycle_budget_size;
   // Translate milliseconds to device cycles
-  uint64_t cycle_budget = executor_->deviceCycles(g_dynamic_watchdog_time_limit);
+  uint64_t cycle_budget =
+      executor_->deviceCycles(executor_->getConfig().exec.watchdog.time_limit);
   if (device_id == 0) {
     LOG(INFO) << "Dynamic Watchdog budget: GPU: "
-              << std::to_string(g_dynamic_watchdog_time_limit) << "ms, "
+              << std::to_string(executor_->getConfig().exec.watchdog.time_limit) << "ms, "
               << std::to_string(cycle_budget) << " cycles";
   }
   checkCudaErrors(cuModuleGetGlobal(

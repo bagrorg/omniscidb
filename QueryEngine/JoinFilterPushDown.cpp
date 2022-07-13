@@ -76,12 +76,12 @@ FilterSelectivity RelAlgExecutor::getFilterSelectivity(
     }
     input_col_descs.push_back(std::make_shared<const InputColDescriptor>(input_col_desc));
   }
-  const auto count_expr =
-      makeExpr<Analyzer::AggExpr>(SQLTypeInfo(g_bigint_count ? kBIGINT : kINT, false),
-                                  kCOUNT,
-                                  nullptr,
-                                  false,
-                                  nullptr);
+  const auto count_expr = makeExpr<Analyzer::AggExpr>(
+      SQLTypeInfo(config_.exec.group_by.bigint_count ? kBIGINT : kINT, false),
+      kCOUNT,
+      nullptr,
+      false,
+      nullptr);
   RelAlgExecutionUnit ra_exe_unit{input_descs,
                                   input_col_descs,
                                   {},
@@ -91,7 +91,8 @@ FilterSelectivity RelAlgExecutor::getFilterSelectivity(
                                   {count_expr.get()},
                                   nullptr,
                                   {{}, SortAlgorithm::Default, 0, 0},
-                                  0};
+                                  0,
+                                  RegisteredQueryHint::fromConfig(config_)};
   size_t one{1};
   TemporaryTable filtered_result;
   const auto table_infos = get_table_infos(input_descs, executor_);
@@ -134,7 +135,8 @@ std::vector<PushedDownFilterInfo> RelAlgExecutor::selectFiltersToBePushedDown(
   if (to_gather_info_for_filter_selectivity(ti)) {
     for (const auto& candidate : all_push_down_candidates) {
       const auto selectivity = getFilterSelectivity(candidate.filter_expressions, co, eo);
-      if (selectivity.is_valid && selectivity.isFilterSelectiveEnough()) {
+      if (selectivity.is_valid &&
+          selectivity.isFilterSelectiveEnough(config_.opts.filter_pushdown)) {
         selective_push_down_candidates.push_back(candidate);
       }
     }
@@ -175,7 +177,7 @@ ExecutionResult RelAlgExecutor::executeRelAlgQueryWithFilterPushDown(
     // Dispatch the subqueries first
     for (auto subquery : subqueries) {
       // Execute the subquery and cache the result.
-      RelAlgExecutor ra_executor(executor_, db_id_, schema_provider_, data_provider_);
+      RelAlgExecutor ra_executor(executor_, schema_provider_, data_provider_);
       const auto subquery_ra = subquery->getRelAlg();
       CHECK(subquery_ra);
       RaExecutionSequence subquery_seq(subquery_ra);
