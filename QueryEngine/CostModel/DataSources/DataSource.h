@@ -19,10 +19,10 @@
 
 namespace CostModel {
 
-class Connector {
+class DataSource {
 public:
-    Connector() = default;
-    virtual ~Connector() = default;
+    DataSource() = default;
+    virtual ~DataSource() = default;
 
     virtual std::vector<Measurement> getMeasurements() = 0;
 };
