@@ -11,28 +11,23 @@
     limitations under the License.
 */
 
-#pragma once
-
-#include <unordered_map>
-#include <vector>
-#include <cstdint>
-#include <string>
+#include "Measurements.h"
 
 namespace CostModel {
 
-using TimeMilliseconds = size_t;
-using SizeBytes = size_t;
-
-using Measurement = std::vector<std::pair<SizeBytes, TimeMilliseconds>>;
-
-// TODO
-enum AnalyticalTemplate {
-    GroupBy,
-    Scan,
-    Join,
-    Reduce,
-};
-
- std::string templatetoString(AnalyticalTemplate templ);
+std::string templatetoString(AnalyticalTemplate templ) {
+    switch (templ) {
+    case AnalyticalTemplate::GroupBy:
+        return "groupby";
+    case AnalyticalTemplate::Join:
+        return "join";
+    case AnalyticalTemplate::Scan:
+        return "scan";
+    case AnalyticalTemplate::Reduce:
+        return "reduce";
+    default:
+        return "unknown";
+    }
+}
 
 }
