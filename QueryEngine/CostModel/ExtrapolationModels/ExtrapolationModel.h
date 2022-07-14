@@ -17,23 +17,17 @@
 #include <unordered_map>
 
 #include "QueryEngine/CompilationOptions.h"
-
 #include "QueryEngine/CostModel/Measurements.h"
 
 namespace CostModel {
 
-using Func = std::function<size_t(size_t)>;
+using TimePrediction = std::function<size_t(size_t)>;
 
 class ExtrapolationModel {
 public:
     virtual ~ExtrapolationModel() = default;
 
-    virtual std::unordered_map<ExecutorDeviceType, Func> getExtrapolatedData() = 0;
-
-    void setData(std::vector<Measurement> &&_measurements);
-
-protected:
-    std::vector<Measurement> measurements;
+    virtual TimePrediction getExtrapolatedData(const Measurement &measurement) = 0;
 };
 
 }

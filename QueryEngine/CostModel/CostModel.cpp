@@ -16,14 +16,25 @@
 namespace CostModel {
 
 
-CostModel::CostModel(std::unique_ptr<Connector> _connector, std::unique_ptr<ExtrapolationModel> _extrapolation) 
-        : connector(std::move(_connector)), extrapolation(std::move(_extrapolation)) {}
+CostModel::CostModel(std::unique_ptr<DataSource> _dataSource, std::unique_ptr<ExtrapolationModel> _extrapolation) 
+        : dataSource(std::move(_dataSource)), extrapolation(std::move(_extrapolation)) {}
 
 
 void CostModel::calibrate() {
-    std::vector<Measurement> measurements = connector->getMeasurements();
-    extrapolation->setData(std::move(measurements));
-    predictions = extrapolation->getExtrapolatedData();
+    dp.clear();
+    dm = dataSource->getMeasurements(templates);
+
+    for (const auto &dmEntry: dm) {
+        ExecutorDeviceType device = dmEntry.first;
+
+        for (const auto &templateMeasurement: dmEntry.second) {
+            AnalyticalTemplate templ = templateMeasurement.first;
+            TimePrediction prediction = extrapolation->getExtrapolatedData(templateMeasurement.second);
+
+            // TODO: is ok?
+            dp[device][templ] = std::move(prediction);
+        }
+    }
 }
 
 }

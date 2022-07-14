@@ -25,7 +25,7 @@ public:
     DataSource() = default;
     virtual ~DataSource() = default;
 
-    virtual std::unordered_map<AnalyticalTemplate, Measurement> getMeasurements(const std::vector<AnalyticalTemplate> &templates) = 0;
+    virtual DeviceMeasurements getMeasurements(const std::vector<AnalyticalTemplate> &templates) = 0;
 };
 
 }

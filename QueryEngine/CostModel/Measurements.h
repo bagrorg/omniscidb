@@ -18,12 +18,9 @@
 #include <cstdint>
 #include <string>
 
+#include "QueryEngine/CompilationOptions.h"
+
 namespace CostModel {
-
-using TimeMilliseconds = size_t;
-using SizeBytes = size_t;
-
-using Measurement = std::vector<std::pair<SizeBytes, TimeMilliseconds>>;
 
 // TODO
 enum AnalyticalTemplate {
@@ -33,6 +30,12 @@ enum AnalyticalTemplate {
     Reduce,
 };
 
- std::string templatetoString(AnalyticalTemplate templ);
+std::string templatetoString(AnalyticalTemplate templ);
 
+using TimeMilliseconds = size_t;
+using SizeBytes = size_t;
+
+using Measurement = std::vector<std::pair<SizeBytes, TimeMilliseconds>>;
+using TemplateMeasurements = std::unordered_map<AnalyticalTemplate, Measurement>;
+using DeviceMeasurements = std::unordered_map<ExecutorDeviceType, TemplateMeasurements>;
 }

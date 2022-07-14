@@ -18,8 +18,8 @@
 
 namespace CostModel {
 
-DummyCostModel::DummyCostModel(std::unique_ptr<Connector> _connector, std::unique_ptr<ExtrapolationModel> _extrapolation) 
-    : CostModel(std::move(_connector), std::move(_extrapolation)) {};
+DummyCostModel::DummyCostModel(std::unique_ptr<DataSource> _dataSource, std::unique_ptr<ExtrapolationModel> _extrapolation) 
+    : CostModel(std::move(_dataSource), std::move(_extrapolation)) {};
 
 
 std::unique_ptr<policy::ExecutionPolicy> DummyCostModel::predict(size_t sizeInBytes) {

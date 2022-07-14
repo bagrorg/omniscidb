@@ -15,27 +15,40 @@
 
 #include <memory>
 
-#include "Connectors/Connector.h"
+#include "DataSources/DataSource.h"
 #include "ExtrapolationModels/ExtrapolationModel.h"
 #include "Measurements.h"
 
 #include "QueryEngine/Dispatchers/ExecutionPolicy.h"
+#include "QueryEngine/CompilationOptions.h"
 
 namespace CostModel {
 
+using TemplatePredictions = std::unordered_map<AnalyticalTemplate, TimePrediction>;
+using DevicePredictions = std::unordered_map<ExecutorDeviceType, TemplatePredictions>;
+
 class CostModel {
 public:
-    CostModel(std::unique_ptr<Connector> _connector, std::unique_ptr<ExtrapolationModel> _extrapolation);
+    CostModel(std::unique_ptr<DataSource> _dataSource, std::unique_ptr<ExtrapolationModel> _extrapolation);
     virtual ~CostModel() = default;
 
     void calibrate();
     virtual std::unique_ptr<policy::ExecutionPolicy> predict(size_t sizeInBytes) = 0;
 
 protected:
-    std::unique_ptr<Connector> connector;
+    std::unique_ptr<DataSource> dataSource;
     std::unique_ptr<ExtrapolationModel> extrapolation;
 
-    std::unordered_map<ExecutorDeviceType, Func> predictions; 
+    // TODO: naming
+    DeviceMeasurements dm;
+    DevicePredictions dp;
+
+    std::vector<AnalyticalTemplate> templates = {
+        GroupBy,
+        Join,
+        Scan,
+        Reduce
+    };
 };
 
 

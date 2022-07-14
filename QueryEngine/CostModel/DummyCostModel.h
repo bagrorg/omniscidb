@@ -19,7 +19,7 @@ namespace CostModel {
 
 class DummyCostModel : public CostModel {
 public:
-    DummyCostModel(std::unique_ptr<Connector> _connector, std::unique_ptr<ExtrapolationModel> _extrapolation);
+    DummyCostModel(std::unique_ptr<DataSource> _dataSource, std::unique_ptr<ExtrapolationModel> _extrapolation);
 
     std::unique_ptr<policy::ExecutionPolicy> predict(size_t sizeInBytes) override;
 };

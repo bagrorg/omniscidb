@@ -30,7 +30,7 @@ class DwarfBench : public DataSource {
 public: 
     DwarfBench() = default;
 
-    std::unordered_map<AnalyticalTemplate, Measurement> getMeasurements(const std::vector<AnalyticalTemplate> &templates) override;
+    DeviceMeasurements getMeasurements(const std::vector<AnalyticalTemplate> &templates) override;
 
 private:
     void runSpecifiedDwarf(const std::string &templateName, const boost::filesystem::path &reportFile);
