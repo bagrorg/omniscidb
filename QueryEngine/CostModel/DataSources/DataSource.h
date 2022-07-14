@@ -16,6 +16,7 @@
 #include "QueryEngine/CostModel/Measurements.h"
 
 #include <vector>
+#include <unordered_map>
 
 namespace CostModel {
 
@@ -24,7 +25,7 @@ public:
     DataSource() = default;
     virtual ~DataSource() = default;
 
-    virtual std::vector<Measurement> getMeasurements() = 0;
+    virtual std::unordered_map<AnalyticalTemplate, Measurement> getMeasurements(const std::vector<AnalyticalTemplate> &templates) = 0;
 };
 
 }
