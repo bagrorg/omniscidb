@@ -15,8 +15,8 @@
 
 #include <memory>
 
-#include "Connector.h"
-#include "ExtrapolationModel.h"
+#include "Connectors/Connector.h"
+#include "ExtrapolationModels/ExtrapolationModel.h"
 #include "Measurements.h"
 
 #include "QueryEngine/Dispatchers/ExecutionPolicy.h"

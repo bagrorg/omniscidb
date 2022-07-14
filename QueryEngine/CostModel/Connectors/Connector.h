@@ -13,27 +13,18 @@
 
 #pragma once
 
-#include <functional>
-#include <unordered_map>
+#include "QueryEngine/CostModel/Measurements.h"
 
-#include "QueryEngine/CompilationOptions.h"
-
-#include "Measurements.h"
+#include <vector>
 
 namespace CostModel {
 
-using Func = std::function<size_t(size_t)>;
-
-class ExtrapolationModel {
+class Connector {
 public:
-    virtual ~ExtrapolationModel() = default;
+    Connector() = default;
+    virtual ~Connector() = default;
 
-    virtual std::unordered_map<ExecutorDeviceType, Func> getExtrapolatedData() = 0;
-
-    void setData(std::vector<Measurement> &&_measurements);
-
-protected:
-    std::vector<Measurement> measurements;
+    virtual std::vector<Measurement> getMeasurements() = 0;
 };
 
 }
