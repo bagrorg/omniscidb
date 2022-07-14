@@ -11,20 +11,12 @@
     limitations under the License.
 */
 
-#pragma once
-
-#include "Measurements.h"
-
-#include <vector>
+#include "ExtrapolationModel.h"
 
 namespace CostModel {
 
-class Connector {
-public:
-    Connector() = default;
-    virtual ~Connector() = default;
-
-    virtual std::vector<Measurement> getMeasurements() = 0;
-};
+void ExtrapolationModel::setData(std::vector<Measurement> &&_measurements) {
+    measurements = std::move(_measurements);
+}
 
 }

@@ -13,18 +13,30 @@
 
 #pragma once
 
+#include <memory>
+
+#include "Connector.h"
+#include "ExtrapolationModel.h"
 #include "Measurements.h"
 
-#include <vector>
+#include "QueryEngine/Dispatchers/ExecutionPolicy.h"
 
 namespace CostModel {
 
-class Connector {
+class CostModel {
 public:
-    Connector() = default;
-    virtual ~Connector() = default;
+    CostModel(std::unique_ptr<Connector> _connector, std::unique_ptr<ExtrapolationModel> _extrapolation);
+    ~CostModel() = default;
 
-    virtual std::vector<Measurement> getMeasurements() = 0;
+    void calibrate();
+    std::unique_ptr<policy::ExecutionPolicy> predict(size_t sizeInBytes);
+
+private:
+    std::unique_ptr<Connector> connector;
+    std::unique_ptr<ExtrapolationModel> extrapolation;
+
+    std::unordered_map<ExecutorDeviceType, Func> predictions; 
 };
+
 
 }
