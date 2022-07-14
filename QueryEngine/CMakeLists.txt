@@ -137,6 +137,14 @@ set(query_engine_source_files
     QueryTemplateGenerator.h
     TableFunctions/TableFunctionManager.h)
 
+
+if (ENABLE_COST_MODEL)
+    list(APPEND query_engine_source_files
+            CostModel/CostModel.cpp
+            CostModel/ExtrapolationModel.cpp
+            CostModel/DummyCostModel.cpp)
+endif()
+
 set(query_engine_cuda_source_files
     TopKSort.cu
     InPlaceSortImpl.cu
