@@ -13,15 +13,28 @@
 
 #pragma once
 
+#include <string>
+
 #include "DataSource.h"
 
 namespace CostModel {
+
+// COnfig
+// TODO: somwhere else
+const std::string DWARF_BENCH_PATH = "/dwarf_bench";
+const std::string sizeHeader = "buf_size_bytes";
+const std::string timeHeader = "total_time";
+
 
 class DwarfBench : public DataSource {
 public: 
     DwarfBench() = default;
 
-    std::vector<Measurement> getMeasurements() override;
+    std::unordered_map<AnalyticalTemplate, Measurement> getMeasurements(const std::vector<AnalyticalTemplate> &templates) override;
+
+private:
+    void runSpecifiedDwarf(const std::string &templateName, const boost::filesystem::path &reportFile);
+    Measurement readReportFile(const boost::filesystem::path &reportFile);
 };
 
 }
