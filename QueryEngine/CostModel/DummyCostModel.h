@@ -11,20 +11,18 @@
     limitations under the License.
 */
 
+#pragma once
+
 #include "CostModel.h"
 
 namespace CostModel {
 
+class DummyCostModel : public CostModel {
+public:
+    DummyCostModel(std::unique_ptr<Connector> _connector, std::unique_ptr<ExtrapolationModel> _extrapolation);
 
-CostModel::CostModel(std::unique_ptr<Connector> _connector, std::unique_ptr<ExtrapolationModel> _extrapolation) 
-        : connector(std::move(_connector)), extrapolation(std::move(_extrapolation)) {}
+    std::unique_ptr<policy::ExecutionPolicy> predict(size_t sizeInBytes) override;
+};
 
-
-void CostModel::calibrate() {
-    std::vector<Measurement> measurements = connector->getMeasurements();
-    extrapolation->setData(std::move(measurements));
-    predictions = extrapolation->getExtrapolatedData();
-}
 
 }
-

@@ -26,12 +26,12 @@ namespace CostModel {
 class CostModel {
 public:
     CostModel(std::unique_ptr<Connector> _connector, std::unique_ptr<ExtrapolationModel> _extrapolation);
-    ~CostModel() = default;
+    virtual ~CostModel() = default;
 
     void calibrate();
-    std::unique_ptr<policy::ExecutionPolicy> predict(size_t sizeInBytes);
+    virtual std::unique_ptr<policy::ExecutionPolicy> predict(size_t sizeInBytes) = 0;
 
-private:
+protected:
     std::unique_ptr<Connector> connector;
     std::unique_ptr<ExtrapolationModel> extrapolation;
 
