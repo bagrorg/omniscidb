@@ -141,7 +141,7 @@ set(query_engine_source_files
 if (ENABLE_COST_MODEL)
     list(APPEND query_engine_source_files
             CostModel/CostModel.cpp
-            CostModel/ExtrapolationModels/ExtrapolationModel.cpp
+            CostModel/Measurements.cpp
             CostModel/DummyCostModel.cpp)
 endif()
 
