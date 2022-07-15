@@ -32,7 +32,7 @@ DeviceMeasurements DwarfBench::getMeasurements(const std::vector<ExecutorDeviceT
     for (AnalyticalTemplate templ: templates) {
         for (ExecutorDeviceType device: devices) {
             std::string deviceName = deviceToDwarfString(device);
-            std::string templateName = templatetoString(templ);
+            std::string templateName = templateToDwarfString(templ);
             boost::filesystem::path reportFile = "report_" + templateName + ".csv";
 
             runSpecifiedDwarf(templateName, deviceName, reportFile);
@@ -111,5 +111,22 @@ DwarfBench::DwarfCsvParser::CsvColumnIndexes DwarfBench::DwarfCsvParser::parseHe
 std::string deviceToDwarfString(ExecutorDeviceType device) {
     return device == ExecutorDeviceType::CPU ? "cpu" : "gpu";
 }
+
+std::string templateToDwarfString(AnalyticalTemplate templ) {
+    switch (templ) {
+    case AnalyticalTemplate::GroupBy:
+        return "groupby";
+    case AnalyticalTemplate::Join:
+        return "join";
+    case AnalyticalTemplate::Scan:
+        return "scan";
+    case AnalyticalTemplate::Reduce:
+        return "reduce";
+    default:
+        return "unknown";
+    }
+}
+
+
 
 }

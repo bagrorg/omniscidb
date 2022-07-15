@@ -55,6 +55,7 @@ private:
     void runSpecifiedDwarf(const std::string &templateName, const std::string &deviceName, const boost::filesystem::path &reportFile);
 
     std::string deviceToDwarfString(ExecutorDeviceType device);
+    std::string templateToDwarfString(AnalyticalTemplate templ);
 };
 
 class DwarfBenchException : public std::runtime_error {
