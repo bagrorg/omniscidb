@@ -38,4 +38,11 @@ using SizeBytes = size_t;
 using Measurement = std::vector<std::pair<SizeBytes, TimeMilliseconds>>;
 using TemplateMeasurements = std::unordered_map<AnalyticalTemplate, Measurement>;
 using DeviceMeasurements = std::unordered_map<ExecutorDeviceType, TemplateMeasurements>;
+
+struct MeasurementOrder {
+    bool operator()(const std::pair<SizeBytes, TimeMilliseconds> &p1, const std::pair<SizeBytes, TimeMilliseconds> &p2) {
+        return p1.first < p2.first;
+    }
+};
+
 }

@@ -67,6 +67,8 @@ Measurement DwarfBench::DwarfCsvParser::parseMeasurement(const boost::filesystem
         ms.emplace_back(entries.at(indexes.sizeIndex), entries.at(indexes.timeIndex));
     }
 
+    std::sort(ms.begin(), ms.end(), MeasurementOrder());
+
     return ms;
 }
 
