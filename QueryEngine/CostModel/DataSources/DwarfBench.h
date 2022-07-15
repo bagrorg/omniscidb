@@ -35,7 +35,7 @@ public:
 private:
     class DwarfCsvParser {
     public:
-        Measurement parseMeasurement(const boost::filesystem::path &csv);
+        std::vector<Measurement> parseMeasurement(const boost::filesystem::path &csv);
     
     private:
         struct CsvColumnIndexes {
@@ -45,8 +45,9 @@ private:
         std::string line;
         std::vector<std::string> entries;   
         
-        size_t getCsvColumnIndex(const std::vector<std::string> &header, const std::string &columnName);
+        size_t getCsvColumnIndex(const std::string &columnName);
         CsvColumnIndexes parseHeader(std::ifstream &in);
+        Measurement parseLine(const CsvColumnIndexes &indexes);
     };
 
     DwarfCsvParser parser;

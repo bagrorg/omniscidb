@@ -32,17 +32,16 @@ enum AnalyticalTemplate {
 
 std::string templatetoString(AnalyticalTemplate templ);
 
-using TimeMilliseconds = size_t;
-using SizeBytes = size_t;
+struct Measurement {
+    size_t bytes;
+    size_t milliseconds;
 
-using Measurement = std::vector<std::pair<SizeBytes, TimeMilliseconds>>;
-using TemplateMeasurements = std::unordered_map<AnalyticalTemplate, Measurement>;
-using DeviceMeasurements = std::unordered_map<ExecutorDeviceType, TemplateMeasurements>;
-
-struct MeasurementOrder {
-    bool operator()(const std::pair<SizeBytes, TimeMilliseconds> &p1, const std::pair<SizeBytes, TimeMilliseconds> &p2) {
-        return p1.first < p2.first;
+    bool operator<(const Measurement &other) const {
+        return bytes < other.bytes;
     }
 };
+
+using TemplateMeasurements = std::unordered_map<AnalyticalTemplate, std::vector<Measurement>>;
+using DeviceMeasurements = std::unordered_map<ExecutorDeviceType, TemplateMeasurements>;
 
 }

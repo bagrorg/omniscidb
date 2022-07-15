@@ -50,7 +50,7 @@ void DwarfBench::runSpecifiedDwarf(const std::string &templateName, const std::s
     system(executeLine.c_str());
 }
 
-Measurement DwarfBench::DwarfCsvParser::parseMeasurement(const boost::filesystem::path &csv) {
+std::vector<Measurement> DwarfBench::DwarfCsvParser::parseMeasurement(const boost::filesystem::path &csv) {
     line.clear();
     entries.clear();
 
@@ -58,38 +58,51 @@ Measurement DwarfBench::DwarfCsvParser::parseMeasurement(const boost::filesystem
     if (!in.good())
         throw DwarfBenchException("No such report file: " + csv.string());
 
-    Measurement ms;
+    std::vector<Measurement> ms;
     CsvColumnIndexes indexes = parseHeader(in);
 
     while(std::getline(in, line)) {
         entries.clear();
-        boost::split(entries, line, ",");
-        ms.emplace_back(entries.at(indexes.sizeIndex), entries.at(indexes.timeIndex));
+        boost::split(entries, line, boost::is_any_of(","));
+
+        ms.push_back(parseLine(indexes));
     }
 
-    std::sort(ms.begin(), ms.end(), MeasurementOrder());
+    std::sort(ms.begin(), ms.end());
 
     return ms;
 }
 
-size_t DwarfBench::DwarfCsvParser::getCsvColumnIndex(const std::vector<std::string> &header, const std::string &columnName) {
-    auto iter = std::find(header.begin(), header.end(), columnName);
+Measurement DwarfBench::DwarfCsvParser::parseLine(const CsvColumnIndexes &indexes) {
+    entries.clear();
+    boost::split(entries, line, boost::is_any_of(","));
 
-    if (iter == header.end())
+    Measurement m = {
+        .bytes = std::stoull(entries.at(indexes.sizeIndex)),
+        .milliseconds = std::stoull(entries.at(indexes.timeIndex))
+    };
+
+    return m;
+}
+
+size_t DwarfBench::DwarfCsvParser::getCsvColumnIndex(const std::string &columnName) {
+    auto iter = std::find(entries.begin(), entries.end(), columnName);
+
+    if (iter == entries.end())
         throw DwarfBenchException("No such column: " + columnName);
 
-    return iter - header.begin();
+    return iter - entries.begin();
 }
 
 DwarfBench::DwarfCsvParser::CsvColumnIndexes DwarfBench::DwarfCsvParser::parseHeader(std::ifstream &in) {
     in.seekg(0);
     
     std::getline(in, line);
-    boost::split(entries, line, ",");
+    boost::split(entries, line, boost::is_any_of(","));
 
     CsvColumnIndexes indexes = {
-        .timeIndex = getCsvColumnIndex(entries, timeHeader),
-        .sizeIndex = getCsvColumnIndex(entries, sizeHeader)
+        .timeIndex = getCsvColumnIndex(timeHeader),
+        .sizeIndex = getCsvColumnIndex(sizeHeader)
     };
 
     return indexes;

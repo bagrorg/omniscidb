@@ -17,10 +17,15 @@
 
 namespace CostModel {
 
-TimePrediction LinearExtrapolation::getExtrapolatedData(const Measurement &measurement) {
-    TimePrediction tp = [&measurement] (SizeBytes bytes) {
+TimePrediction LinearExtrapolation::getExtrapolatedData(const std::vector<Measurement> &measurement) {
+    TimePrediction tp = [&measurement] (size_t bytes) -> size_t {
         size_t id1, id2;
-        auto iter = std::upper_bound(measurement.begin(), measurement.end(), bytes, MeasurementOrder());
+        Measurement tmp = {
+            .bytes = bytes,
+            .milliseconds = 0
+        };
+
+        auto iter = std::upper_bound(measurement.begin(), measurement.end(), tmp);
 
         if (iter == measurement.begin()) {
             id1 = 0;
@@ -33,11 +38,13 @@ TimePrediction LinearExtrapolation::getExtrapolatedData(const Measurement &measu
             id1 = id2 - 1;
         }
 
-        TimeMilliseconds y1 = measurement[id1].second, y2 = measurement[id2].second;
-        SizeBytes x1 = measurement[id1].first, x2 = measurement[id2].second;
+        size_t y1 = measurement[id1].milliseconds, y2 = measurement[id2].milliseconds;
+        size_t x1 = measurement[id1].bytes, x2 = measurement[id2].bytes;
 
         return y1 + ((double) bytes - x1) / (x2 - x1) * (y2 - y1);
     };
+
+    return tp;
 }
 
 }
