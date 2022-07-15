@@ -56,4 +56,9 @@ private:
     std::string deviceToDwarfString(ExecutorDeviceType device);
 };
 
+class DwarfBenchException : public std::runtime_error {
+public:
+    DwarfBenchException(const std::string &msg) : std::runtime_error("DwarfBench data source exception: " + msg) {};
+};
+
 }

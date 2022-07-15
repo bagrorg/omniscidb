@@ -50,19 +50,21 @@ void DwarfBench::runSpecifiedDwarf(const std::string &templateName, const std::s
     system(executeLine.c_str());
 }
 
-// TODO: add errors handle
 Measurement DwarfBench::DwarfCsvParser::parseMeasurement(const boost::filesystem::path &csv) {
     line.clear();
     entries.clear();
 
     std::ifstream in(csv);
+    if (!in.good())
+        throw DwarfBenchException("No such report file: " + csv.string());
+
     Measurement ms;
     CsvColumnIndexes indexes = parseHeader(in);
 
     while(std::getline(in, line)) {
         entries.clear();
         boost::split(entries, line, ",");
-        ms.emplace_back(entries[indexes.sizeIndex], entries[indexes.timeIndex]);
+        ms.emplace_back(entries.at(indexes.sizeIndex), entries.at(indexes.timeIndex));
     }
 
     return ms;
@@ -70,6 +72,10 @@ Measurement DwarfBench::DwarfCsvParser::parseMeasurement(const boost::filesystem
 
 size_t DwarfBench::DwarfCsvParser::getCsvColumnIndex(const std::vector<std::string> &header, const std::string &columnName) {
     auto iter = std::find(header.begin(), header.end(), columnName);
+
+    if (iter == header.end())
+        throw DwarfBenchException("No such column: " + columnName);
+
     return iter - header.begin();
 }
 
