@@ -30,11 +30,30 @@ class DwarfBench : public DataSource {
 public: 
     DwarfBench() = default;
 
-    DeviceMeasurements getMeasurements(const std::vector<AnalyticalTemplate> &templates) override;
+    DeviceMeasurements getMeasurements(const std::vector<ExecutorDeviceType> &devices, const std::vector<AnalyticalTemplate> &templates) override;
 
 private:
-    void runSpecifiedDwarf(const std::string &templateName, const boost::filesystem::path &reportFile);
-    Measurement readReportFile(const boost::filesystem::path &reportFile);
+    class DwarfCsvParser {
+    public:
+        Measurement parseMeasurement(const boost::filesystem::path &csv);
+    
+    private:
+        struct CsvColumnIndexes {
+            size_t timeIndex;
+            size_t sizeIndex;
+        };
+        std::string line;
+        std::vector<std::string> entries;   
+        
+        size_t getCsvColumnIndex(const std::vector<std::string> &header, const std::string &columnName);
+        CsvColumnIndexes parseHeader(std::ifstream &in);
+    };
+
+    DwarfCsvParser parser;
+
+    void runSpecifiedDwarf(const std::string &templateName, const std::string &deviceName, const boost::filesystem::path &reportFile);
+
+    std::string deviceToDwarfString(ExecutorDeviceType device);
 };
 
 }

@@ -25,7 +25,7 @@ public:
     DataSource() = default;
     virtual ~DataSource() = default;
 
-    virtual DeviceMeasurements getMeasurements(const std::vector<AnalyticalTemplate> &templates) = 0;
+    virtual DeviceMeasurements getMeasurements(const std::vector<ExecutorDeviceType> &devices, const std::vector<AnalyticalTemplate> &templates) = 0;
 };
 
 }
