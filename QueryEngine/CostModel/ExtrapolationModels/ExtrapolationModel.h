@@ -21,7 +21,7 @@
 
 namespace CostModel {
 
-using TimePrediction = std::function<size_t(size_t)>;
+using TimePrediction = std::function<SizeBytes(TimeMilliseconds)>;
 
 class ExtrapolationModel {
 public:
