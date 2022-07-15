@@ -142,6 +142,7 @@ if (ENABLE_COST_MODEL)
     list(APPEND query_engine_source_files
             CostModel/CostModel.cpp
             CostModel/Measurements.cpp
+            CostModel/DataSources/DwarfBench.cpp
             CostModel/DummyCostModel.cpp)
 endif()
 
