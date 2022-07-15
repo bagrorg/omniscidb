@@ -49,6 +49,11 @@ protected:
         Scan,
         Reduce
     };
+
+    std::vector<ExecutorDeviceType> devices = {
+        ExecutorDeviceType::CPU,
+        ExecutorDeviceType::GPU
+    };
 };
 
 

@@ -22,7 +22,7 @@ CostModel::CostModel(std::unique_ptr<DataSource> _dataSource, std::unique_ptr<Ex
 
 void CostModel::calibrate() {
     dp.clear();
-    dm = dataSource->getMeasurements(templates);
+    dm = dataSource->getMeasurements(devices, templates);
 
     for (const auto &dmEntry: dm) {
         ExecutorDeviceType device = dmEntry.first;
