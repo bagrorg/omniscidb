@@ -29,7 +29,6 @@ DeviceMeasurements DwarfBench::getMeasurements(const std::vector<ExecutorDeviceT
         boost::filesystem::create_directory(dwarf_path / "results");
     }
 
-    std::unordered_map<AnalyticalTemplate, Measurement> measurements;
     for (AnalyticalTemplate templ: templates) {
         for (ExecutorDeviceType device: devices) {
             std::string deviceName = deviceToDwarfString(device);
