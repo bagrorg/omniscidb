@@ -143,6 +143,7 @@ if (ENABLE_COST_MODEL)
             CostModel/CostModel.cpp
             CostModel/Measurements.cpp
             CostModel/DataSources/DwarfBench.cpp
+            CostModel/ExtrapolationModels/LinearExtrapolation.cpp
             CostModel/DummyCostModel.cpp)
 endif()
 
