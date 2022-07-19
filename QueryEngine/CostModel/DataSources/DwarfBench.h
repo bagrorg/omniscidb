@@ -25,45 +25,49 @@ const std::string DWARF_BENCH_PATH = "";
 const std::string sizeHeader = "buf_size_bytes";
 const std::string timeHeader = "total_time";
 
-
 class DwarfBench : public DataSource {
-public: 
-    DwarfBench() = default;
+ public:
+  DwarfBench() = default;
 
-    DeviceMeasurements getMeasurements(const std::vector<ExecutorDeviceType> &devices, const std::vector<AnalyticalTemplate> &templates) override;
+  DeviceMeasurements getMeasurements(
+      const std::vector<ExecutorDeviceType>& devices,
+      const std::vector<AnalyticalTemplate>& templates) override;
 
-private:
-    class DwarfCsvParser {
-    public:
-        std::vector<Measurement> parseMeasurement(const boost::filesystem::path &csv);
-    
-    private:
-        struct CsvColumnIndexes {
-            size_t timeIndex;
-            size_t sizeIndex;
-        };
-        std::string line;
-        std::vector<std::string> entries;   
-        
-        size_t getCsvColumnIndex(const std::string &columnName);
-        CsvColumnIndexes parseHeader(std::ifstream &in);
-        Measurement parseLine(const CsvColumnIndexes &indexes);
-        std::vector<Measurement> parseMeasurements(std::ifstream &in, const CsvColumnIndexes &indexes);
+ private:
+  class DwarfCsvParser {
+   public:
+    std::vector<Measurement> parseMeasurement(const boost::filesystem::path& csv);
+
+   private:
+    struct CsvColumnIndexes {
+      size_t timeIndex;
+      size_t sizeIndex;
     };
+    std::string line;
+    std::vector<std::string> entries;
 
-    DwarfCsvParser parser;
+    size_t getCsvColumnIndex(const std::string& columnName);
+    CsvColumnIndexes parseHeader(std::ifstream& in);
+    Measurement parseLine(const CsvColumnIndexes& indexes);
+    std::vector<Measurement> parseMeasurements(std::ifstream& in,
+                                               const CsvColumnIndexes& indexes);
+  };
 
-    boost::filesystem::path runDwarfAndGetReportFile(AnalyticalTemplate templ, ExecutorDeviceType device);
+  DwarfCsvParser parser;
 
-    std::string deviceToDwarfString(ExecutorDeviceType device);
-    std::string templateToDwarfString(AnalyticalTemplate templ);
+  boost::filesystem::path runDwarfAndGetReportFile(AnalyticalTemplate templ,
+                                                   ExecutorDeviceType device);
 
-    bool isDeviceSupported(ExecutorDeviceType device);
+  std::string deviceToDwarfString(ExecutorDeviceType device);
+  std::string templateToDwarfString(AnalyticalTemplate templ);
+
+  bool isDeviceSupported(ExecutorDeviceType device);
 };
 
 class DwarfBenchException : public std::runtime_error {
-public:
-    DwarfBenchException(const std::string &msg) : std::runtime_error("DwarfBench data source exception: " + msg) {};
+ public:
+  DwarfBenchException(const std::string& msg)
+      : std::runtime_error("DwarfBench data source exception: " + msg){};
 };
 
-}
+}  // namespace CostModel

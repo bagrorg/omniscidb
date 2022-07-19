@@ -19,8 +19,8 @@
 #include "ExtrapolationModels/ExtrapolationModel.h"
 #include "Measurements.h"
 
-#include "QueryEngine/Dispatchers/ExecutionPolicy.h"
 #include "QueryEngine/CompilationOptions.h"
+#include "QueryEngine/Dispatchers/ExecutionPolicy.h"
 
 namespace CostModel {
 
@@ -28,32 +28,25 @@ using TemplatePredictions = std::unordered_map<AnalyticalTemplate, TimePredictio
 using DevicePredictions = std::unordered_map<ExecutorDeviceType, TemplatePredictions>;
 
 class CostModel {
-public:
-    CostModel(std::unique_ptr<DataSource> _dataSource, std::unique_ptr<ExtrapolationModel> _extrapolation);
-    virtual ~CostModel() = default;
+ public:
+  CostModel(std::unique_ptr<DataSource> _dataSource,
+            std::unique_ptr<ExtrapolationModel> _extrapolation);
+  virtual ~CostModel() = default;
 
-    void calibrate();
-    virtual std::unique_ptr<policy::ExecutionPolicy> predict(size_t sizeInBytes) = 0;
+  void calibrate();
+  virtual std::unique_ptr<policy::ExecutionPolicy> predict(size_t sizeInBytes) = 0;
 
-protected:
-    std::unique_ptr<DataSource> dataSource;
-    std::unique_ptr<ExtrapolationModel> extrapolation;
+ protected:
+  std::unique_ptr<DataSource> dataSource;
+  std::unique_ptr<ExtrapolationModel> extrapolation;
 
-    DeviceMeasurements dm;
-    DevicePredictions dp;
+  DeviceMeasurements dm;
+  DevicePredictions dp;
 
-    std::vector<AnalyticalTemplate> templates = {
-        GroupBy,
-        Join,
-        Scan,
-        Reduce
-    };
+  std::vector<AnalyticalTemplate> templates = {GroupBy, Join, Scan, Reduce};
 
-    std::vector<ExecutorDeviceType> devices = {
-        ExecutorDeviceType::CPU,
-        ExecutorDeviceType::GPU
-    };
+  std::vector<ExecutorDeviceType> devices = {ExecutorDeviceType::CPU,
+                                             ExecutorDeviceType::GPU};
 };
 
-
-}
+}  // namespace CostModel

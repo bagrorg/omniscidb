@@ -24,10 +24,11 @@ namespace CostModel {
 using TimePrediction = std::function<size_t(size_t)>;
 
 class ExtrapolationModel {
-public:
-    virtual ~ExtrapolationModel() = default;
+ public:
+  virtual ~ExtrapolationModel() = default;
 
-    virtual TimePrediction getExtrapolatedData(const std::vector<Measurement> &measurement) = 0;
+  virtual TimePrediction getExtrapolatedData(
+      const std::vector<Measurement>& measurement) = 0;
 };
 
-}
+}  // namespace CostModel

@@ -15,17 +15,19 @@
 
 #include "QueryEngine/CostModel/Measurements.h"
 
-#include <vector>
 #include <unordered_map>
+#include <vector>
 
 namespace CostModel {
 
 class DataSource {
-public:
-    DataSource() = default;
-    virtual ~DataSource() = default;
+ public:
+  DataSource() = default;
+  virtual ~DataSource() = default;
 
-    virtual DeviceMeasurements getMeasurements(const std::vector<ExecutorDeviceType> &devices, const std::vector<AnalyticalTemplate> &templates) = 0;
+  virtual DeviceMeasurements getMeasurements(
+      const std::vector<ExecutorDeviceType>& devices,
+      const std::vector<AnalyticalTemplate>& templates) = 0;
 };
 
-}
+}  // namespace CostModel

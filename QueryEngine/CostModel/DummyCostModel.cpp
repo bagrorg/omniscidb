@@ -11,19 +11,19 @@
     limitations under the License.
 */
 
-
 #include "DummyCostModel.h"
 
 #include "QueryEngine/Dispatchers/DefaultExecutionPolicy.h"
 
 namespace CostModel {
 
-DummyCostModel::DummyCostModel(std::unique_ptr<DataSource> _dataSource, std::unique_ptr<ExtrapolationModel> _extrapolation) 
-    : CostModel(std::move(_dataSource), std::move(_extrapolation)) {};
-
+DummyCostModel::DummyCostModel(std::unique_ptr<DataSource> _dataSource,
+                               std::unique_ptr<ExtrapolationModel> _extrapolation)
+    : CostModel(std::move(_dataSource), std::move(_extrapolation)){};
 
 std::unique_ptr<policy::ExecutionPolicy> DummyCostModel::predict(size_t sizeInBytes) {
-    return std::make_unique<policy::FragmentIDAssignmentExecutionPolicy>(ExecutorDeviceType::CPU);
+  return std::make_unique<policy::FragmentIDAssignmentExecutionPolicy>(
+      ExecutorDeviceType::CPU);
 }
 
-}
+}  // namespace CostModel

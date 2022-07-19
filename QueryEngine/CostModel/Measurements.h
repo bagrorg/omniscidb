@@ -13,10 +13,10 @@
 
 #pragma once
 
-#include <unordered_map>
-#include <vector>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "QueryEngine/CompilationOptions.h"
 
@@ -24,22 +24,21 @@ namespace CostModel {
 
 // TODO: add templates
 enum AnalyticalTemplate {
-    GroupBy,
-    Scan,
-    Join,
-    Reduce,
+  GroupBy,
+  Scan,
+  Join,
+  Reduce,
 };
 
 struct Measurement {
-    size_t bytes;
-    size_t milliseconds;
+  size_t bytes;
+  size_t milliseconds;
 
-    bool operator<(const Measurement &other) const {
-        return bytes < other.bytes;
-    }
+  bool operator<(const Measurement& other) const { return bytes < other.bytes; }
 };
 
-using TemplateMeasurements = std::unordered_map<AnalyticalTemplate, std::vector<Measurement>>;
+using TemplateMeasurements =
+    std::unordered_map<AnalyticalTemplate, std::vector<Measurement>>;
 using DeviceMeasurements = std::unordered_map<ExecutorDeviceType, TemplateMeasurements>;
 
-}
+}  // namespace CostModel

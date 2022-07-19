@@ -15,30 +15,28 @@
 
 namespace CostModel {
 
-
-CostModel::CostModel(std::unique_ptr<DataSource> _dataSource, std::unique_ptr<ExtrapolationModel> _extrapolation) 
-        : dataSource(std::move(_dataSource)), extrapolation(std::move(_extrapolation)) {}
-
+CostModel::CostModel(std::unique_ptr<DataSource> _dataSource,
+                     std::unique_ptr<ExtrapolationModel> _extrapolation)
+    : dataSource(std::move(_dataSource)), extrapolation(std::move(_extrapolation)) {}
 
 void CostModel::calibrate() {
-    dp.clear();
+  dp.clear();
 
-    try {
-        dm = dataSource->getMeasurements(devices, templates);
-    } catch (const std::exception &e) {
-        LOG(ERROR) << "Cost model calibration failure: " << e.what();
-        return;
+  try {
+    dm = dataSource->getMeasurements(devices, templates);
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "Cost model calibration failure: " << e.what();
+    return;
+  }
+
+  for (const auto& dmEntry : dm) {
+    ExecutorDeviceType device = dmEntry.first;
+
+    for (const auto& templateMeasurement : dmEntry.second) {
+      AnalyticalTemplate templ = templateMeasurement.first;
+      dp[device][templ] = extrapolation->getExtrapolatedData(templateMeasurement.second);
     }
-
-    for (const auto &dmEntry: dm) {
-        ExecutorDeviceType device = dmEntry.first;
-
-        for (const auto &templateMeasurement: dmEntry.second) {
-            AnalyticalTemplate templ = templateMeasurement.first;
-            dp[device][templ] = extrapolation->getExtrapolatedData(templateMeasurement.second);
-        }
-    }
+  }
 }
 
-}
-
+}  // namespace CostModel
