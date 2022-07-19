@@ -20,6 +20,7 @@ CostModel::CostModel(std::unique_ptr<DataSource> _dataSource,
     : dataSource(std::move(_dataSource)), extrapolation(std::move(_extrapolation)) {}
 
 void CostModel::calibrate() {
+  std::lock_guard<std::mutex> g {latch};
   dp.clear();
 
   try {

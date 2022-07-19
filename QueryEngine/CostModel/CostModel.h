@@ -14,6 +14,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 
 #include "DataSources/DataSource.h"
 #include "ExtrapolationModels/ExtrapolationModel.h"
@@ -47,6 +48,8 @@ class CostModel {
 
   std::vector<ExecutorDeviceType> devices = {ExecutorDeviceType::CPU,
                                              ExecutorDeviceType::GPU};
+
+  std::mutex latch;
 };
 
 }  // namespace CostModel
