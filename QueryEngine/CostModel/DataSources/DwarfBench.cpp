@@ -58,6 +58,8 @@ boost::filesystem::path DwarfBench::runDwarfAndGetReportFile(AnalyticalTemplate 
                             reportFile.string() + " --device " + deviceName +
                             " > /dev/null";
   system(executeLine.c_str());
+
+  return reportFile;
 }
 
 std::vector<Measurement> DwarfBench::DwarfCsvParser::parseMeasurement(
