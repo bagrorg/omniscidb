@@ -20,8 +20,8 @@
 namespace CostModel {
 
 // COnfig
-// TODO: somwhere else
-const std::string DWARF_BENCH_PATH = "/dwarf_bench";
+// TODO: how to pass?
+const std::string DWARF_BENCH_PATH = "";
 const std::string sizeHeader = "buf_size_bytes";
 const std::string timeHeader = "total_time";
 
@@ -48,14 +48,17 @@ private:
         size_t getCsvColumnIndex(const std::string &columnName);
         CsvColumnIndexes parseHeader(std::ifstream &in);
         Measurement parseLine(const CsvColumnIndexes &indexes);
+        std::vector<Measurement> parseMeasurements(std::ifstream &in, const CsvColumnIndexes &indexes);
     };
 
     DwarfCsvParser parser;
 
-    void runSpecifiedDwarf(const std::string &templateName, const std::string &deviceName, const boost::filesystem::path &reportFile);
+    boost::filesystem::path runDwarfAndGetReportFile(AnalyticalTemplate templ, ExecutorDeviceType device);
 
     std::string deviceToDwarfString(ExecutorDeviceType device);
     std::string templateToDwarfString(AnalyticalTemplate templ);
+
+    bool isDeviceSupported(ExecutorDeviceType device);
 };
 
 class DwarfBenchException : public std::runtime_error {

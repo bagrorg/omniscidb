@@ -20,7 +20,6 @@
 
 namespace CostModel {
 
-// TODO: add supported devices
 class DataSource {
 public:
     DataSource() = default;

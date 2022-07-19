@@ -25,17 +25,16 @@ DeviceMeasurements DwarfBench::getMeasurements(const std::vector<ExecutorDeviceT
     DeviceMeasurements dm;
     boost::filesystem::path dwarf_path = DWARF_BENCH_PATH;
 
-    if (!boost::filesystem::exists(dwarf_path /  "results")) {
+    if (!boost::filesystem::exists(dwarf_path / "results")) {
         boost::filesystem::create_directory(dwarf_path / "results");
     }
 
     for (AnalyticalTemplate templ: templates) {
         for (ExecutorDeviceType device: devices) {
-            std::string deviceName = deviceToDwarfString(device);
-            std::string templateName = templateToDwarfString(templ);
-            boost::filesystem::path reportFile = "report_" + templateName + ".csv";
+            if (!isDeviceSupported(device))
+                continue;
 
-            runSpecifiedDwarf(templateName, deviceName, reportFile);
+            boost::filesystem::path reportFile = runDwarfAndGetReportFile(templ, device);
             dm[device][templ] = parser.parseMeasurement(reportFile);
         }
     }
@@ -44,9 +43,14 @@ DeviceMeasurements DwarfBench::getMeasurements(const std::vector<ExecutorDeviceT
 }
 
 // TODO: more crossplatform and check errors
-void DwarfBench::runSpecifiedDwarf(const std::string &templateName, const std::string &deviceName, const boost::filesystem::path &reportFile) {
-    std::string scriptPath = DWARF_BENCH_PATH + "/scripts/" + "benchmark_" + templateName + ".sh";
-    std::string executeLine = scriptPath + " " + reportFile.string() + " " + deviceName + " > /dev/null";
+boost::filesystem::path DwarfBench::runDwarfAndGetReportFile(AnalyticalTemplate templ, ExecutorDeviceType device) {
+    boost::filesystem::path dwarf_path = DWARF_BENCH_PATH;
+    std::string deviceName = deviceToDwarfString(device);
+    std::string templateName = templateToDwarfString(templ);
+    boost::filesystem::path reportFile = dwarf_path / "results" / ("report_" + templateName + ".csv");
+
+    std::string scriptPath = DWARF_BENCH_PATH + "/scripts/" + "run.py";
+    std::string executeLine = scriptPath + " --dwarf " + templateName + " --report_path " + reportFile.string() + " --device " + deviceName + " > /dev/null";
     system(executeLine.c_str());
 }
 
@@ -58,16 +62,8 @@ std::vector<Measurement> DwarfBench::DwarfCsvParser::parseMeasurement(const boos
     if (!in.good())
         throw DwarfBenchException("No such report file: " + csv.string());
 
-    std::vector<Measurement> ms;
     CsvColumnIndexes indexes = parseHeader(in);
-
-    while(std::getline(in, line)) {
-        entries.clear();
-        boost::split(entries, line, boost::is_any_of(","));
-
-        ms.push_back(parseLine(indexes));
-    }
-
+    std::vector<Measurement> ms = parseMeasurements(in, indexes);
     std::sort(ms.begin(), ms.end());
 
     return ms;
@@ -108,11 +104,24 @@ DwarfBench::DwarfCsvParser::CsvColumnIndexes DwarfBench::DwarfCsvParser::parseHe
     return indexes;
 }
 
-std::string deviceToDwarfString(ExecutorDeviceType device) {
+std::vector<Measurement> DwarfBench::DwarfCsvParser::parseMeasurements(std::ifstream &in, const CsvColumnIndexes &indexes) {
+    std::vector<Measurement> ms;
+
+    while(std::getline(in, line)) {
+        entries.clear();
+        boost::split(entries, line, boost::is_any_of(","));
+
+        ms.push_back(parseLine(indexes));
+    }
+
+    return ms;
+}
+
+std::string DwarfBench::deviceToDwarfString(ExecutorDeviceType device) {
     return device == ExecutorDeviceType::CPU ? "cpu" : "gpu";
 }
 
-std::string templateToDwarfString(AnalyticalTemplate templ) {
+std::string DwarfBench::templateToDwarfString(AnalyticalTemplate templ) {
     switch (templ) {
     case AnalyticalTemplate::GroupBy:
         return "groupby";
@@ -127,6 +136,9 @@ std::string templateToDwarfString(AnalyticalTemplate templ) {
     }
 }
 
+bool DwarfBench::isDeviceSupported(ExecutorDeviceType device) {
+    return device == ExecutorDeviceType::CPU || device == ExecutorDeviceType::GPU;
+}
 
 
 }

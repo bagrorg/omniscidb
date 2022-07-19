@@ -39,7 +39,6 @@ protected:
     std::unique_ptr<DataSource> dataSource;
     std::unique_ptr<ExtrapolationModel> extrapolation;
 
-    // TODO: naming
     DeviceMeasurements dm;
     DevicePredictions dp;
 

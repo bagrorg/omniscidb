@@ -22,7 +22,7 @@
 
 namespace CostModel {
 
-// TODO
+// TODO: add templates
 enum AnalyticalTemplate {
     GroupBy,
     Scan,

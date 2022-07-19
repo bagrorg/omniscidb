@@ -26,7 +26,7 @@ void CostModel::calibrate() {
     try {
         dm = dataSource->getMeasurements(devices, templates);
     } catch (const std::exception &e) {
-        LOG(ERROR) << "Calibration failure: " << e.what();
+        LOG(ERROR) << "Cost model calibration failure: " << e.what();
         return;
     }
 
@@ -35,10 +35,7 @@ void CostModel::calibrate() {
 
         for (const auto &templateMeasurement: dmEntry.second) {
             AnalyticalTemplate templ = templateMeasurement.first;
-            TimePrediction prediction = extrapolation->getExtrapolatedData(templateMeasurement.second);
-
-            // TODO: is ok?
-            dp[device][templ] = std::move(prediction);
+            dp[device][templ] = extrapolation->getExtrapolatedData(templateMeasurement.second);
         }
     }
 }
