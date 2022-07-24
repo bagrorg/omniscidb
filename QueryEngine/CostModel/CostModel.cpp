@@ -40,4 +40,6 @@ void CostModel::calibrate() {
   }
 }
 
+const std::vector<AnalyticalTemplate> CostModel::templates = {GroupBy, Join, Scan, Reduce};
+
 }  // namespace CostModel

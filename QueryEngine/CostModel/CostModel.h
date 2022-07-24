@@ -45,7 +45,7 @@ class CostModel {
   DeviceMeasurements dm;
   DevicePredictions dp;
 
-  std::vector<AnalyticalTemplate> templates = {GroupBy, Join, Scan, Reduce};
+  static const std::vector<AnalyticalTemplate> templates;
 
   std::vector<ExecutorDeviceType> devices = {ExecutorDeviceType::CPU,
                                              ExecutorDeviceType::GPU};
