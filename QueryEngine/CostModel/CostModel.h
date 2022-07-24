@@ -22,6 +22,7 @@
 
 #include "QueryEngine/CompilationOptions.h"
 #include "QueryEngine/Dispatchers/ExecutionPolicy.h"
+#include "QueryEngine/Descriptors/RelAlgExecutionDescriptor.h"
 
 namespace CostModel {
 
@@ -35,7 +36,7 @@ class CostModel {
   virtual ~CostModel() = default;
 
   void calibrate();
-  virtual std::unique_ptr<policy::ExecutionPolicy> predict(size_t sizeInBytes) = 0;
+  virtual std::unique_ptr<policy::ExecutionPolicy> predict(const RaExecutionSequence &queryDag) = 0;
 
  protected:
   std::unique_ptr<DataSource> dataSource;
@@ -49,7 +50,7 @@ class CostModel {
   std::vector<ExecutorDeviceType> devices = {ExecutorDeviceType::CPU,
                                              ExecutorDeviceType::GPU};
 
-  std::mutex latch;
+  std::mutex latch; 
 };
 
 }  // namespace CostModel

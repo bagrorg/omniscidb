@@ -22,7 +22,7 @@ class DummyCostModel : public CostModel {
   DummyCostModel(std::unique_ptr<DataSource> _dataSource,
                  std::unique_ptr<ExtrapolationModel> _extrapolation);
 
-  std::unique_ptr<policy::ExecutionPolicy> predict(size_t sizeInBytes) override;
+  std::unique_ptr<policy::ExecutionPolicy> predict(const RaExecutionSequence &queryDag) override;
 };
 
 }  // namespace CostModel
