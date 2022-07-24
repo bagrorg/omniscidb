@@ -33,8 +33,12 @@ enum AnalyticalTemplate {
 struct Measurement {
   size_t bytes;
   size_t milliseconds;
+};
 
-  bool operator<(const Measurement& other) const { return bytes < other.bytes; }
+struct BytesOrder {
+  bool operator()(const Measurement &m1, const Measurement &m2) {
+    return m1.bytes < m2.bytes;
+  }
 };
 
 using TemplateMeasurements =

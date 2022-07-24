@@ -73,7 +73,7 @@ std::vector<Measurement> DwarfBench::DwarfCsvParser::parseMeasurement(
 
   CsvColumnIndexes indexes = parseHeader(in);
   std::vector<Measurement> ms = parseMeasurements(in, indexes);
-  std::sort(ms.begin(), ms.end());
+  std::sort(ms.begin(), ms.end(), BytesOrder());
 
   return ms;
 }
