@@ -19,8 +19,7 @@ namespace CostModel {
 
 class DummyCostModel : public CostModel {
  public:
-  DummyCostModel(std::unique_ptr<DataSource> _dataSource,
-                 std::unique_ptr<ExtrapolationModel> _extrapolation);
+  DummyCostModel(std::unique_ptr<DataSource> _dataSource);
 
   std::unique_ptr<policy::ExecutionPolicy> predict(const RaExecutionSequence &queryDag) override;
 };

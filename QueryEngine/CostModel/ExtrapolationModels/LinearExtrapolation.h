@@ -19,8 +19,11 @@ namespace CostModel {
 
 class LinearExtrapolation : public ExtrapolationModel {
  public:
-  TimePrediction getExtrapolatedData(
-      const std::vector<Measurement>& measurement) override;
+  LinearExtrapolation() = default;
+  LinearExtrapolation(const std::vector<Measurement> &measurement) : ExtrapolationModel(measurement) {}
+  LinearExtrapolation(std::vector<Measurement> &&measurement) : ExtrapolationModel(std::move(measurement)) {}
+
+  size_t getExtrapolatedData(size_t bytes) override;
 };
 
 }  // namespace CostModel

@@ -12,16 +12,17 @@
 */
 
 #include "CostModel.h"
+#include "ExtrapolationModels/LinearExtrapolation.h"
 
 namespace CostModel {
 
-CostModel::CostModel(std::unique_ptr<DataSource> _dataSource,
-                     std::unique_ptr<ExtrapolationModel> _extrapolation)
-    : dataSource(std::move(_dataSource)), extrapolation(std::move(_extrapolation)) {}
+CostModel::CostModel(std::unique_ptr<DataSource> _dataSource)
+    : dataSource(std::move(_dataSource)) {}
 
 void CostModel::calibrate() {
   std::lock_guard<std::mutex> g {latch};
   dp.clear();
+  DeviceMeasurements dm;
 
   try {
     dm = dataSource->getMeasurements(devices, templates);
@@ -33,9 +34,9 @@ void CostModel::calibrate() {
   for (const auto& dmEntry : dm) {
     ExecutorDeviceType device = dmEntry.first;
 
-    for (const auto& templateMeasurement : dmEntry.second) {
+    for (auto& templateMeasurement : dmEntry.second) {
       AnalyticalTemplate templ = templateMeasurement.first;
-      dp[device][templ] = extrapolation->getExtrapolatedData(templateMeasurement.second);
+      dp[device][templ] = std::make_unique<LinearExtrapolation>(std::move(templateMeasurement.second));
     }
   }
 }

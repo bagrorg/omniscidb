@@ -17,9 +17,8 @@
 
 namespace CostModel {
 
-DummyCostModel::DummyCostModel(std::unique_ptr<DataSource> _dataSource,
-                               std::unique_ptr<ExtrapolationModel> _extrapolation)
-    : CostModel(std::move(_dataSource), std::move(_extrapolation)){};
+DummyCostModel::DummyCostModel(std::unique_ptr<DataSource> _dataSource)
+    : CostModel(std::move(_dataSource)) {};
 
 std::unique_ptr<policy::ExecutionPolicy> DummyCostModel::predict(const RaExecutionSequence &queryDag) {
   std::lock_guard<std::mutex> g {latch};

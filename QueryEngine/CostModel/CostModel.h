@@ -26,23 +26,20 @@
 
 namespace CostModel {
 
-using TemplatePredictions = std::unordered_map<AnalyticalTemplate, TimePrediction>;
+using TemplatePredictions = std::unordered_map<AnalyticalTemplate, std::unique_ptr<ExtrapolationModel>>;
 using DevicePredictions = std::unordered_map<ExecutorDeviceType, TemplatePredictions>;
 
 class CostModel {
  public:
-  CostModel(std::unique_ptr<DataSource> _dataSource,
-            std::unique_ptr<ExtrapolationModel> _extrapolation);
+  CostModel(std::unique_ptr<DataSource> _dataSource);
   virtual ~CostModel() = default;
 
-  void calibrate();
+  virtual void calibrate();
   virtual std::unique_ptr<policy::ExecutionPolicy> predict(const RaExecutionSequence &queryDag) = 0;
 
  protected:
   std::unique_ptr<DataSource> dataSource;
-  std::unique_ptr<ExtrapolationModel> extrapolation;
 
-  DeviceMeasurements dm;
   DevicePredictions dp;
 
   static const std::vector<AnalyticalTemplate> templates;
