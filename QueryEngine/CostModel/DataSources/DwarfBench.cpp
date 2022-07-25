@@ -22,6 +22,7 @@
 namespace CostModel {
 
 DwarfBench::DwarfBench() : DataSource(DataSourceConfig {
+    .dataSourceName = "DwarfBench",
     .supportedDevices = {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU},
     .supportedTemplates = {AnalyticalTemplate::GroupBy, AnalyticalTemplate::Join, AnalyticalTemplate::Reduce, AnalyticalTemplate::Scan}
   }) {}
@@ -38,9 +39,6 @@ DeviceMeasurements DwarfBench::getMeasurements(
 
   for (AnalyticalTemplate templ : templates) {
     for (ExecutorDeviceType device : devices) {
-      if (!isDeviceSupported(device))
-        continue;
-
       boost::filesystem::path reportFile = runDwarfAndGetReportFile(templ, device);
       dm[device][templ] = parser.parseMeasurement(reportFile);
     }

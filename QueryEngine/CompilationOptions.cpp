@@ -21,3 +21,7 @@ std::ostream& operator<<(std::ostream& os, const ExecutorDeviceType& dt) {
   os << (dt == ExecutorDeviceType::CPU ? "CPU" : "GPU");
   return os;
 }
+
+std::string deviceToString(const ExecutorDeviceType& dt) {
+  return (dt == ExecutorDeviceType::CPU ? "CPU" : "GPU");
+}

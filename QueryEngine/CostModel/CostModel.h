@@ -50,4 +50,10 @@ class CostModel {
   std::mutex latch; 
 };
 
+class CostModelException : std::runtime_error {
+     public:
+  CostModelException(const std::string& msg)
+      : std::runtime_error("CostModel exception: " + msg){};
+};
+
 }  // namespace CostModel

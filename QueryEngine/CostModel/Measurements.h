@@ -30,6 +30,8 @@ enum AnalyticalTemplate {
   Reduce,
 };
 
+std::string templateToString(AnalyticalTemplate templ);
+
 struct Measurement {
   size_t bytes;
   size_t milliseconds;

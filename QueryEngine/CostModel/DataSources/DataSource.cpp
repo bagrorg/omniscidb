@@ -16,7 +16,11 @@
 namespace CostModel {
 
 DataSource::DataSource(const DataSourceConfig &config) : config(config) {}
-    
+
+const std::string &DataSource::getName() {
+    return config.dataSourceName;
+}
+
 bool DataSource::isDeviceSupported(ExecutorDeviceType device) {
     return config.supportedDevices.find(device) != config.supportedDevices.end();
 }

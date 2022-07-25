@@ -21,6 +21,7 @@
 namespace CostModel {
 
 struct DataSourceConfig {
+    std::string dataSourceName;
     std::set<ExecutorDeviceType> supportedDevices; 
     std::set<AnalyticalTemplate> supportedTemplates;
 };
@@ -35,11 +36,13 @@ class DataSource {
     
   bool isDeviceSupported(ExecutorDeviceType device);
   bool isTemplateSupported(AnalyticalTemplate templ);
+  const std::string &getName();
  protected:
     DataSource(const DataSourceConfig &config);
 
  private:
     DataSourceConfig config;
+    std::string dataSourceName;
 };
 
 }  // namespace CostModel

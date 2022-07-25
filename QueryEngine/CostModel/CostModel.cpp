@@ -17,7 +17,18 @@
 namespace CostModel {
 
 CostModel::CostModel(std::unique_ptr<DataSource> _dataSource)
-    : dataSource(std::move(_dataSource)) {}
+    : dataSource(std::move(_dataSource)) {
+    
+    for (AnalyticalTemplate templ: templates) {
+      if (!dataSource->isTemplateSupported(templ))
+        throw CostModelException("template " + templateToString(templ) + " not supported in " + dataSource->getName() + " data source");
+    }
+
+    for (ExecutorDeviceType device: devices) {
+      if (!dataSource->isDeviceSupported(device))
+        throw CostModelException("device " + deviceToString(device) + " not supported in " + dataSource->getName() + " data source");
+    }
+}
 
 void CostModel::calibrate() {
   std::lock_guard<std::mutex> g {latch};

@@ -144,7 +144,8 @@ if (ENABLE_COST_MODEL)
             CostModel/DataSources/DwarfBench.cpp
             CostModel/ExtrapolationModels/LinearExtrapolation.cpp
             CostModel/DummyCostModel.cpp
-            CostModel/DataSources/DataSource.cpp)
+            CostModel/DataSources/DataSource.cpp
+            CostModel/Measurements.cpp)
 endif()
 
 set(query_engine_cuda_source_files
