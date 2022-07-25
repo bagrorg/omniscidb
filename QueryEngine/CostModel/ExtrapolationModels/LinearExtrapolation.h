@@ -19,7 +19,6 @@ namespace CostModel {
 
 class LinearExtrapolation : public ExtrapolationModel {
  public:
-  LinearExtrapolation() = default;
   LinearExtrapolation(const std::vector<Measurement>& measurement)
       : ExtrapolationModel(measurement) {}
   LinearExtrapolation(std::vector<Measurement>&& measurement)

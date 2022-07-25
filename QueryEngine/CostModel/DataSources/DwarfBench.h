@@ -16,6 +16,9 @@
 #include <set>
 #include <string>
 
+#include <boost/algorithm/string.hpp>
+#include <boost/filesystem.hpp>
+
 #include "DataSource.h"
 
 namespace CostModel {

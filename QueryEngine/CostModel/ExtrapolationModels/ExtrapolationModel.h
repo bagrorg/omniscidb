@@ -23,7 +23,6 @@ namespace CostModel {
 
 class ExtrapolationModel {
  public:
-  ExtrapolationModel() = default;
   ExtrapolationModel(const std::vector<Measurement>& measurement)
       : measurement(measurement) {}
   ExtrapolationModel(std::vector<Measurement>&& measurement)
