@@ -14,6 +14,7 @@
 #pragma once
 
 #include <string>
+#include <set>
 
 #include "DataSource.h"
 
@@ -27,7 +28,7 @@ const std::string timeHeader = "total_time";
 
 class DwarfBench : public DataSource {
  public:
-  DwarfBench() = default;
+  DwarfBench();
 
   DeviceMeasurements getMeasurements(
       const std::vector<ExecutorDeviceType>& devices,
@@ -60,8 +61,6 @@ class DwarfBench : public DataSource {
 
   std::string deviceToDwarfString(ExecutorDeviceType device);
   std::string templateToDwarfString(AnalyticalTemplate templ);
-
-  bool isDeviceSupported(ExecutorDeviceType device);
 };
 
 class DwarfBenchException : public std::runtime_error {

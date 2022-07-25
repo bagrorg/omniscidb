@@ -21,6 +21,11 @@
 
 namespace CostModel {
 
+DwarfBench::DwarfBench() : DataSource(DataSourceConfig {
+    .supportedDevices = {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU},
+    .supportedTemplates = {AnalyticalTemplate::GroupBy, AnalyticalTemplate::Join, AnalyticalTemplate::Reduce, AnalyticalTemplate::Scan}
+  }) {}
+
 DeviceMeasurements DwarfBench::getMeasurements(
     const std::vector<ExecutorDeviceType>& devices,
     const std::vector<AnalyticalTemplate>& templates) {
@@ -142,10 +147,6 @@ std::string DwarfBench::templateToDwarfString(AnalyticalTemplate templ) {
     default:
       return "unknown";
   }
-}
-
-bool DwarfBench::isDeviceSupported(ExecutorDeviceType device) {
-  return device == ExecutorDeviceType::CPU || device == ExecutorDeviceType::GPU;
 }
 
 }  // namespace CostModel

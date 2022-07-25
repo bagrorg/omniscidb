@@ -20,14 +20,26 @@
 
 namespace CostModel {
 
+struct DataSourceConfig {
+    std::set<ExecutorDeviceType> supportedDevices; 
+    std::set<AnalyticalTemplate> supportedTemplates;
+};
+
 class DataSource {
  public:
-  DataSource() = default;
   virtual ~DataSource() = default;
 
   virtual DeviceMeasurements getMeasurements(
       const std::vector<ExecutorDeviceType>& devices,
       const std::vector<AnalyticalTemplate>& templates) = 0;
+    
+  bool isDeviceSupported(ExecutorDeviceType device);
+  bool isTemplateSupported(AnalyticalTemplate templ);
+ protected:
+    DataSource(const DataSourceConfig &config);
+
+ private:
+    DataSourceConfig config;
 };
 
 }  // namespace CostModel
