@@ -50,6 +50,7 @@ class CostModel {
                                              ExecutorDeviceType::GPU};
 
   std::mutex latch;
+  bool calibrating = false;
 };
 
 class CostModelException : std::runtime_error {

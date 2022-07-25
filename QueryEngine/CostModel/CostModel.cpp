@@ -33,7 +33,10 @@ CostModel::CostModel(std::unique_ptr<DataSource> _dataSource)
 }
 
 void CostModel::calibrate() {
-  std::lock_guard<std::mutex> g{latch};
+  if (!latch.try_lock() && calibrating) {
+    return;
+  }
+  calibrating = true;
   dp.clear();
   DeviceMeasurements dm;
 
@@ -53,6 +56,9 @@ void CostModel::calibrate() {
           std::make_unique<LinearExtrapolation>(std::move(templateMeasurement.second));
     }
   }
+
+  calibrating = false;
+  latch.unlock();
 }
 
 const std::vector<AnalyticalTemplate> CostModel::templates = {GroupBy,
