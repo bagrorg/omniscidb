@@ -17,62 +17,62 @@
 #include "QueryEngine/CostModel/DataSources/DwarfBench.h"
 #include "QueryEngine/CostModel/ExtrapolationModels/LinearExtrapolation.h"
 
-
 using namespace CostModel;
 
 class DataSourceTest : public DataSource {
-public:
-    DataSourceTest() : DataSource(DataSourceConfig{
-          .dataSourceName = "DataSourceTest",
-          .supportedDevices = {ExecutorDeviceType::CPU},
-          .supportedTemplates = {AnalyticalTemplate::GroupBy}}) {}
+ public:
+  DataSourceTest()
+      : DataSource(
+            DataSourceConfig{.dataSourceName = "DataSourceTest",
+                             .supportedDevices = {ExecutorDeviceType::CPU},
+                             .supportedTemplates = {AnalyticalTemplate::GroupBy}}) {}
 
-    DeviceMeasurements getMeasurements(
+  DeviceMeasurements getMeasurements(
       const std::vector<ExecutorDeviceType>& devices,
       const std::vector<AnalyticalTemplate>& templates) override {
-        return {};
-    }
+    return {};
+  }
 };
 
 TEST(DataSourceTests, SupportCheckTest) {
-    DataSourceTest ds;
-    ASSERT_EQ(ds.getName(), "DataSourceTest");
-    ASSERT_TRUE(ds.isDeviceSupported(ExecutorDeviceType::CPU));
-    ASSERT_TRUE(ds.isTemplateSupported(AnalyticalTemplate::GroupBy));
-    ASSERT_FALSE(ds.isDeviceSupported(ExecutorDeviceType::GPU));
-    ASSERT_FALSE(ds.isTemplateSupported(AnalyticalTemplate::Join));
+  DataSourceTest ds;
+  ASSERT_EQ(ds.getName(), "DataSourceTest");
+  ASSERT_TRUE(ds.isDeviceSupported(ExecutorDeviceType::CPU));
+  ASSERT_TRUE(ds.isTemplateSupported(AnalyticalTemplate::GroupBy));
+  ASSERT_FALSE(ds.isDeviceSupported(ExecutorDeviceType::GPU));
+  ASSERT_FALSE(ds.isTemplateSupported(AnalyticalTemplate::Join));
 }
 
 TEST(DataSourceTests, DwarfBenchSupportCheckTest) {
-    DwarfBench db;
-    ASSERT_EQ(db.getName(), "DwarfBench");
+  DwarfBench db;
+  ASSERT_EQ(db.getName(), "DwarfBench");
 
-    ASSERT_TRUE(db.isDeviceSupported(ExecutorDeviceType::CPU));
-    ASSERT_TRUE(db.isDeviceSupported(ExecutorDeviceType::GPU));
+  ASSERT_TRUE(db.isDeviceSupported(ExecutorDeviceType::CPU));
+  ASSERT_TRUE(db.isDeviceSupported(ExecutorDeviceType::GPU));
 
-    ASSERT_TRUE(db.isTemplateSupported(AnalyticalTemplate::GroupBy));
-    ASSERT_TRUE(db.isTemplateSupported(AnalyticalTemplate::Join));
-    ASSERT_TRUE(db.isTemplateSupported(AnalyticalTemplate::Reduce));
-    ASSERT_TRUE(db.isTemplateSupported(AnalyticalTemplate::Scan));
+  ASSERT_TRUE(db.isTemplateSupported(AnalyticalTemplate::GroupBy));
+  ASSERT_TRUE(db.isTemplateSupported(AnalyticalTemplate::Join));
+  ASSERT_TRUE(db.isTemplateSupported(AnalyticalTemplate::Reduce));
+  ASSERT_TRUE(db.isTemplateSupported(AnalyticalTemplate::Scan));
 }
 
 TEST(DataSourceTests, DwarfBenchGetMeasurements) {
-    //TODO
+  // TODO
 }
 
 TEST(ExtrapolationModelsTests, LinearExtrapolationTest1) {
-    LinearExtrapolation le {{
-        {.bytes = 10, .milliseconds = 100},
-        {.bytes = 20, .milliseconds = 200},
-        {.bytes = 30, .milliseconds = 300},
-    }};
+  LinearExtrapolation le{{
+      {.bytes = 10, .milliseconds = 100},
+      {.bytes = 20, .milliseconds = 200},
+      {.bytes = 30, .milliseconds = 300},
+  }};
 
-    ASSERT_EQ(le.getExtrapolatedData(15), (size_t) 150);
-    ASSERT_EQ(le.getExtrapolatedData(25), (size_t) 250);
-    ASSERT_EQ(le.getExtrapolatedData(35), (size_t) 350);
+  ASSERT_EQ(le.getExtrapolatedData(15), (size_t)150);
+  ASSERT_EQ(le.getExtrapolatedData(25), (size_t)250);
+  ASSERT_EQ(le.getExtrapolatedData(35), (size_t)350);
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
