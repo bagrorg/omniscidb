@@ -21,12 +21,13 @@
 #include "Measurements.h"
 
 #include "QueryEngine/CompilationOptions.h"
-#include "QueryEngine/Dispatchers/ExecutionPolicy.h"
 #include "QueryEngine/Descriptors/RelAlgExecutionDescriptor.h"
+#include "QueryEngine/Dispatchers/ExecutionPolicy.h"
 
 namespace CostModel {
 
-using TemplatePredictions = std::unordered_map<AnalyticalTemplate, std::unique_ptr<ExtrapolationModel>>;
+using TemplatePredictions =
+    std::unordered_map<AnalyticalTemplate, std::unique_ptr<ExtrapolationModel>>;
 using DevicePredictions = std::unordered_map<ExecutorDeviceType, TemplatePredictions>;
 
 class CostModel {
@@ -35,7 +36,8 @@ class CostModel {
   virtual ~CostModel() = default;
 
   virtual void calibrate();
-  virtual std::unique_ptr<policy::ExecutionPolicy> predict(const RaExecutionSequence &queryDag) = 0;
+  virtual std::unique_ptr<policy::ExecutionPolicy> predict(
+      const RaExecutionSequence& queryDag) = 0;
 
  protected:
   std::unique_ptr<DataSource> dataSource;
@@ -47,11 +49,11 @@ class CostModel {
   std::vector<ExecutorDeviceType> devices = {ExecutorDeviceType::CPU,
                                              ExecutorDeviceType::GPU};
 
-  std::mutex latch; 
+  std::mutex latch;
 };
 
 class CostModelException : std::runtime_error {
-     public:
+ public:
   CostModelException(const std::string& msg)
       : std::runtime_error("CostModel exception: " + msg){};
 };

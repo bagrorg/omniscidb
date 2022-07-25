@@ -24,12 +24,14 @@ namespace CostModel {
 class ExtrapolationModel {
  public:
   ExtrapolationModel() = default;
-  ExtrapolationModel(const std::vector<Measurement> &measurement) : measurement(measurement) {}
-  ExtrapolationModel(std::vector<Measurement> &&measurement) : measurement(std::move(measurement)) {}
+  ExtrapolationModel(const std::vector<Measurement>& measurement)
+      : measurement(measurement) {}
+  ExtrapolationModel(std::vector<Measurement>&& measurement)
+      : measurement(std::move(measurement)) {}
   virtual ~ExtrapolationModel() = default;
 
   virtual size_t getExtrapolatedData(size_t bytes) = 0;
- 
+
  protected:
   std::vector<Measurement> measurement;
 };

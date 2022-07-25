@@ -21,11 +21,14 @@
 
 namespace CostModel {
 
-DwarfBench::DwarfBench() : DataSource(DataSourceConfig {
-    .dataSourceName = "DwarfBench",
-    .supportedDevices = {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU},
-    .supportedTemplates = {AnalyticalTemplate::GroupBy, AnalyticalTemplate::Join, AnalyticalTemplate::Reduce, AnalyticalTemplate::Scan}
-  }) {}
+DwarfBench::DwarfBench()
+    : DataSource(DataSourceConfig{
+          .dataSourceName = "DwarfBench",
+          .supportedDevices = {ExecutorDeviceType::CPU, ExecutorDeviceType::GPU},
+          .supportedTemplates = {AnalyticalTemplate::GroupBy,
+                                 AnalyticalTemplate::Join,
+                                 AnalyticalTemplate::Reduce,
+                                 AnalyticalTemplate::Scan}}) {}
 
 DeviceMeasurements DwarfBench::getMeasurements(
     const std::vector<ExecutorDeviceType>& devices,

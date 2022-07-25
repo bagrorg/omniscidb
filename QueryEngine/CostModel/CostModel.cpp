@@ -18,20 +18,22 @@ namespace CostModel {
 
 CostModel::CostModel(std::unique_ptr<DataSource> _dataSource)
     : dataSource(std::move(_dataSource)) {
-    
-    for (AnalyticalTemplate templ: templates) {
-      if (!dataSource->isTemplateSupported(templ))
-        throw CostModelException("template " + templateToString(templ) + " not supported in " + dataSource->getName() + " data source");
-    }
+  for (AnalyticalTemplate templ : templates) {
+    if (!dataSource->isTemplateSupported(templ))
+      throw CostModelException("template " + templateToString(templ) +
+                               " not supported in " + dataSource->getName() +
+                               " data source");
+  }
 
-    for (ExecutorDeviceType device: devices) {
-      if (!dataSource->isDeviceSupported(device))
-        throw CostModelException("device " + deviceToString(device) + " not supported in " + dataSource->getName() + " data source");
-    }
+  for (ExecutorDeviceType device : devices) {
+    if (!dataSource->isDeviceSupported(device))
+      throw CostModelException("device " + deviceToString(device) + " not supported in " +
+                               dataSource->getName() + " data source");
+  }
 }
 
 void CostModel::calibrate() {
-  std::lock_guard<std::mutex> g {latch};
+  std::lock_guard<std::mutex> g{latch};
   dp.clear();
   DeviceMeasurements dm;
 
@@ -47,11 +49,15 @@ void CostModel::calibrate() {
 
     for (auto& templateMeasurement : dmEntry.second) {
       AnalyticalTemplate templ = templateMeasurement.first;
-      dp[device][templ] = std::make_unique<LinearExtrapolation>(std::move(templateMeasurement.second));
+      dp[device][templ] =
+          std::make_unique<LinearExtrapolation>(std::move(templateMeasurement.second));
     }
   }
 }
 
-const std::vector<AnalyticalTemplate> CostModel::templates = {GroupBy, Join, Scan, Reduce};
+const std::vector<AnalyticalTemplate> CostModel::templates = {GroupBy,
+                                                              Join,
+                                                              Scan,
+                                                              Reduce};
 
 }  // namespace CostModel

@@ -38,7 +38,7 @@ struct Measurement {
 };
 
 struct BytesOrder {
-  bool operator()(const Measurement &m1, const Measurement &m2) {
+  bool operator()(const Measurement& m1, const Measurement& m2) {
     return m1.bytes < m2.bytes;
   }
 };

@@ -15,19 +15,18 @@
 
 namespace CostModel {
 
-DataSource::DataSource(const DataSourceConfig &config) : config(config) {}
+DataSource::DataSource(const DataSourceConfig& config) : config(config) {}
 
-const std::string &DataSource::getName() {
-    return config.dataSourceName;
+const std::string& DataSource::getName() {
+  return config.dataSourceName;
 }
 
 bool DataSource::isDeviceSupported(ExecutorDeviceType device) {
-    return config.supportedDevices.find(device) != config.supportedDevices.end();
+  return config.supportedDevices.find(device) != config.supportedDevices.end();
 }
 
 bool DataSource::isTemplateSupported(AnalyticalTemplate templ) {
-    return config.supportedTemplates.find(templ) != config.supportedTemplates.end();
+  return config.supportedTemplates.find(templ) != config.supportedTemplates.end();
 }
 
-
-} // namespace CostModel
+}  // namespace CostModel
