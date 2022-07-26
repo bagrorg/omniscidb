@@ -19,9 +19,10 @@ namespace CostModel {
 
 size_t LinearExtrapolation::getExtrapolatedData(size_t bytes) {
   size_t id1, id2;
-  Measurement tmp = {.bytes = bytes, .milliseconds = 0};
+  Detail::Measurement tmp = {.bytes = bytes, .milliseconds = 0};
 
-  auto iter = std::upper_bound(measurement.begin(), measurement.end(), tmp, BytesOrder());
+  auto iter =
+      std::upper_bound(measurement.begin(), measurement.end(), tmp, Detail::BytesOrder());
 
   if (iter == measurement.begin()) {
     id1 = 0;

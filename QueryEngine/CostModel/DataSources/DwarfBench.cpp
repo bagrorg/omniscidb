@@ -27,10 +27,10 @@ DwarfBench::DwarfBench()
                                  AnalyticalTemplate::Reduce,
                                  AnalyticalTemplate::Scan}}) {}
 
-DeviceMeasurements DwarfBench::getMeasurements(
+Detail::DeviceMeasurements DwarfBench::getMeasurements(
     const std::vector<ExecutorDeviceType>& devices,
     const std::vector<AnalyticalTemplate>& templates) {
-  DeviceMeasurements dm;
+  Detail::DeviceMeasurements dm;
   boost::filesystem::path dwarf_path = DWARF_BENCH_PATH;
 
   if (!boost::filesystem::exists(dwarf_path / "results")) {
@@ -65,7 +65,7 @@ boost::filesystem::path DwarfBench::runDwarfAndGetReportFile(AnalyticalTemplate 
   return reportFile;
 }
 
-std::vector<Measurement> DwarfBench::DwarfCsvParser::parseMeasurement(
+std::vector<Detail::Measurement> DwarfBench::DwarfCsvParser::parseMeasurement(
     const boost::filesystem::path& csv) {
   line.clear();
   entries.clear();
@@ -75,18 +75,19 @@ std::vector<Measurement> DwarfBench::DwarfCsvParser::parseMeasurement(
     throw DwarfBenchException("No such report file: " + csv.string());
 
   CsvColumnIndexes indexes = parseHeader(in);
-  std::vector<Measurement> ms = parseMeasurements(in, indexes);
-  std::sort(ms.begin(), ms.end(), BytesOrder());
+  std::vector<Detail::Measurement> ms = parseMeasurements(in, indexes);
+  std::sort(ms.begin(), ms.end(), Detail::BytesOrder());
 
   return ms;
 }
 
-Measurement DwarfBench::DwarfCsvParser::parseLine(const CsvColumnIndexes& indexes) {
+Detail::Measurement DwarfBench::DwarfCsvParser::parseLine(
+    const CsvColumnIndexes& indexes) {
   entries.clear();
   boost::split(entries, line, boost::is_any_of(","));
 
-  Measurement m = {.bytes = std::stoull(entries.at(indexes.sizeIndex)),
-                   .milliseconds = std::stoull(entries.at(indexes.timeIndex))};
+  Detail::Measurement m = {.bytes = std::stoull(entries.at(indexes.sizeIndex)),
+                           .milliseconds = std::stoull(entries.at(indexes.timeIndex))};
 
   return m;
 }
@@ -113,10 +114,10 @@ DwarfBench::DwarfCsvParser::CsvColumnIndexes DwarfBench::DwarfCsvParser::parseHe
   return indexes;
 }
 
-std::vector<Measurement> DwarfBench::DwarfCsvParser::parseMeasurements(
+std::vector<Detail::Measurement> DwarfBench::DwarfCsvParser::parseMeasurements(
     std::ifstream& in,
     const CsvColumnIndexes& indexes) {
-  std::vector<Measurement> ms;
+  std::vector<Detail::Measurement> ms;
 
   while (std::getline(in, line)) {
     entries.clear();

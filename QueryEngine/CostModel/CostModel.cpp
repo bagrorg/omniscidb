@@ -38,7 +38,7 @@ void CostModel::calibrate() {
   }
   calibrating = true;
   dp.clear();
-  DeviceMeasurements dm;
+  Detail::DeviceMeasurements dm;
 
   try {
     dm = dataSource->getMeasurements(devices, templates);

@@ -33,14 +33,14 @@ class DwarfBench : public DataSource {
  public:
   DwarfBench();
 
-  DeviceMeasurements getMeasurements(
+  Detail::DeviceMeasurements getMeasurements(
       const std::vector<ExecutorDeviceType>& devices,
       const std::vector<AnalyticalTemplate>& templates) override;
 
  private:
   class DwarfCsvParser {
    public:
-    std::vector<Measurement> parseMeasurement(const boost::filesystem::path& csv);
+    std::vector<Detail::Measurement> parseMeasurement(const boost::filesystem::path& csv);
 
    private:
     struct CsvColumnIndexes {
@@ -52,9 +52,9 @@ class DwarfBench : public DataSource {
 
     size_t getCsvColumnIndex(const std::string& columnName);
     CsvColumnIndexes parseHeader(std::ifstream& in);
-    Measurement parseLine(const CsvColumnIndexes& indexes);
-    std::vector<Measurement> parseMeasurements(std::ifstream& in,
-                                               const CsvColumnIndexes& indexes);
+    Detail::Measurement parseLine(const CsvColumnIndexes& indexes);
+    std::vector<Detail::Measurement> parseMeasurements(std::ifstream& in,
+                                                       const CsvColumnIndexes& indexes);
   };
 
   DwarfCsvParser parser;

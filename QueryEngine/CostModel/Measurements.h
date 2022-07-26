@@ -32,6 +32,8 @@ enum AnalyticalTemplate {
 
 std::string templateToString(AnalyticalTemplate templ);
 
+namespace Detail {
+
 struct Measurement {
   size_t bytes;
   size_t milliseconds;
@@ -46,5 +48,7 @@ struct BytesOrder {
 using TemplateMeasurements =
     std::unordered_map<AnalyticalTemplate, std::vector<Measurement>>;
 using DeviceMeasurements = std::unordered_map<ExecutorDeviceType, TemplateMeasurements>;
+
+}  // namespace Detail
 
 }  // namespace CostModel

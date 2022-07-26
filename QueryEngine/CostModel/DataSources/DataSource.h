@@ -30,7 +30,7 @@ class DataSource {
  public:
   virtual ~DataSource() = default;
 
-  virtual DeviceMeasurements getMeasurements(
+  virtual Detail::DeviceMeasurements getMeasurements(
       const std::vector<ExecutorDeviceType>& devices,
       const std::vector<AnalyticalTemplate>& templates) = 0;
 
