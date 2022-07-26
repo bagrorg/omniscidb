@@ -27,6 +27,10 @@ DwarfBench::DwarfBench()
                                  AnalyticalTemplate::Reduce,
                                  AnalyticalTemplate::Scan}}) {}
 
+const std::string DwarfBench::sizeHeader = "buf_size_bytes";
+const std::string DwarfBench::timeHeader = "total_time";
+const std::string DwarfBench::DWARF_BENCH_PATH = std::getenv("DWARF_BENCH_PATH");
+
 Detail::DeviceMeasurements DwarfBench::getMeasurements(
     const std::vector<ExecutorDeviceType>& devices,
     const std::vector<AnalyticalTemplate>& templates) {

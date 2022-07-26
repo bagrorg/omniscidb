@@ -27,7 +27,7 @@ class DataSourceTest : public DataSource {
                              .supportedDevices = {ExecutorDeviceType::CPU},
                              .supportedTemplates = {AnalyticalTemplate::GroupBy}}) {}
 
-  DeviceMeasurements getMeasurements(
+  Detail::DeviceMeasurements getMeasurements(
       const std::vector<ExecutorDeviceType>& devices,
       const std::vector<AnalyticalTemplate>& templates) override {
     return {};

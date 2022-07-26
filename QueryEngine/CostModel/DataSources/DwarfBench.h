@@ -23,12 +23,6 @@
 
 namespace CostModel {
 
-// COnfig
-// TODO: how to pass?
-const std::string DWARF_BENCH_PATH = "";
-const std::string sizeHeader = "buf_size_bytes";
-const std::string timeHeader = "total_time";
-
 class DwarfBench : public DataSource {
  public:
   DwarfBench();
@@ -64,6 +58,10 @@ class DwarfBench : public DataSource {
 
   std::string deviceToDwarfString(ExecutorDeviceType device);
   std::string templateToDwarfString(AnalyticalTemplate templ);
+
+  static const std::string sizeHeader;
+  static const std::string timeHeader;
+  static const std::string DWARF_BENCH_PATH;
 };
 
 class DwarfBenchException : public std::runtime_error {
