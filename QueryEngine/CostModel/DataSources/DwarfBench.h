@@ -23,6 +23,8 @@
 
 namespace CostModel {
 
+// This is a temporary implementation while there is no 
+// library for interaction in dwarf bench
 class DwarfBench : public DataSource {
  public:
   DwarfBench();
