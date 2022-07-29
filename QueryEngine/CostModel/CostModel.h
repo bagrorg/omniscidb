@@ -27,7 +27,7 @@
 namespace CostModel {
 
 struct CaibrationConfig {
-    std::vector<ExecutorDeviceType> devices;
+  std::vector<ExecutorDeviceType> devices;
 };
 
 using TemplatePredictions =
@@ -39,7 +39,7 @@ class CostModel {
   CostModel(std::unique_ptr<DataSource> _dataSource);
   virtual ~CostModel() = default;
 
-  virtual void calibrate(const CaibrationConfig &conf);
+  virtual void calibrate(const CaibrationConfig& conf);
   virtual std::unique_ptr<policy::ExecutionPolicy> predict(
       const RaExecutionSequence& queryDag) = 0;
 

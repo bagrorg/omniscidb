@@ -40,8 +40,6 @@ std::string DwarfBench::getDwarfBenchPath() {
   }
 }
 
-
-
 Detail::DeviceMeasurements DwarfBench::getMeasurements(
     const std::vector<ExecutorDeviceType>& devices,
     const std::vector<AnalyticalTemplate>& templates) {

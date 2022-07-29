@@ -32,12 +32,12 @@ CostModel::CostModel(std::unique_ptr<DataSource> _dataSource)
   }
 }
 
-void CostModel::calibrate(const CaibrationConfig &conf) {
+void CostModel::calibrate(const CaibrationConfig& conf) {
   if (!latch.try_lock() && calibrating) {
     return;
   }
   calibrating = true;
-  
+
   Detail::DeviceMeasurements dm;
 
   try {
