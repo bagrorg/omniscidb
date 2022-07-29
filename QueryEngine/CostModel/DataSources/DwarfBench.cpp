@@ -29,13 +29,24 @@ DwarfBench::DwarfBench()
 
 const std::string DwarfBench::sizeHeader = "buf_size_bytes";
 const std::string DwarfBench::timeHeader = "total_time";
-const std::string DwarfBench::DWARF_BENCH_PATH = std::getenv("DWARF_BENCH_PATH");
+
+std::string DwarfBench::getDwarfBenchPath() {
+  static const char* DWARF_BENCH_PATH = std::getenv("DWARF_BENCH_PATH");
+
+  if (DWARF_BENCH_PATH == NULL) {
+    throw DwarfBenchException("DWARF_BENCH_PATH environment variable not set");
+  } else {
+    return DWARF_BENCH_PATH;
+  }
+}
+
+
 
 Detail::DeviceMeasurements DwarfBench::getMeasurements(
     const std::vector<ExecutorDeviceType>& devices,
     const std::vector<AnalyticalTemplate>& templates) {
   Detail::DeviceMeasurements dm;
-  boost::filesystem::path dwarf_path = DWARF_BENCH_PATH;
+  boost::filesystem::path dwarf_path = getDwarfBenchPath();
 
   if (!boost::filesystem::exists(dwarf_path / "results")) {
     boost::filesystem::create_directory(dwarf_path / "results");
@@ -54,13 +65,13 @@ Detail::DeviceMeasurements DwarfBench::getMeasurements(
 // TODO: more crossplatform and check errors
 boost::filesystem::path DwarfBench::runDwarfAndGetReportFile(AnalyticalTemplate templ,
                                                              ExecutorDeviceType device) {
-  boost::filesystem::path dwarf_path = DWARF_BENCH_PATH;
+  boost::filesystem::path dwarf_path = getDwarfBenchPath();
   std::string deviceName = deviceToDwarfString(device);
   std::string templateName = templateToDwarfString(templ);
   boost::filesystem::path reportFile =
       dwarf_path / "results" / ("report_" + templateName + ".csv");
 
-  std::string scriptPath = DWARF_BENCH_PATH + "/scripts/" + "run.py";
+  std::string scriptPath = getDwarfBenchPath() + "/scripts/" + "run.py";
   std::string executeLine = scriptPath + " --dwarf " + templateName + " --report_path " +
                             reportFile.string() + " --device " + deviceName +
                             " > /dev/null";

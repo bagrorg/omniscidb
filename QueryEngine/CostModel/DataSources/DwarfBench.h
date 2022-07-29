@@ -61,7 +61,7 @@ class DwarfBench : public DataSource {
 
   static const std::string sizeHeader;
   static const std::string timeHeader;
-  static const std::string DWARF_BENCH_PATH;
+  static std::string getDwarfBenchPath();
 };
 
 class DwarfBenchException : public std::runtime_error {

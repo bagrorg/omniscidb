@@ -32,16 +32,16 @@ CostModel::CostModel(std::unique_ptr<DataSource> _dataSource)
   }
 }
 
-void CostModel::calibrate() {
+void CostModel::calibrate(const CaibrationConfig &conf) {
   if (!latch.try_lock() && calibrating) {
     return;
   }
   calibrating = true;
-  dp.clear();
+  
   Detail::DeviceMeasurements dm;
 
   try {
-    dm = dataSource->getMeasurements(devices, templates);
+    dm = dataSource->getMeasurements(conf.devices, templates);
   } catch (const std::exception& e) {
     LOG(ERROR) << "Cost model calibration failure: " << e.what();
     return;

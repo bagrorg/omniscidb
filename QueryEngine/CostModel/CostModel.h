@@ -26,6 +26,10 @@
 
 namespace CostModel {
 
+struct CaibrationConfig {
+    std::vector<ExecutorDeviceType> devices;
+};
+
 using TemplatePredictions =
     std::unordered_map<AnalyticalTemplate, std::unique_ptr<ExtrapolationModel>>;
 using DevicePredictions = std::unordered_map<ExecutorDeviceType, TemplatePredictions>;
@@ -35,7 +39,7 @@ class CostModel {
   CostModel(std::unique_ptr<DataSource> _dataSource);
   virtual ~CostModel() = default;
 
-  virtual void calibrate();
+  virtual void calibrate(const CaibrationConfig &conf);
   virtual std::unique_ptr<policy::ExecutionPolicy> predict(
       const RaExecutionSequence& queryDag) = 0;
 
