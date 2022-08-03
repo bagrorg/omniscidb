@@ -16,7 +16,7 @@
 #include <fstream>
 #include <iostream>
 
-namespace CostModel {
+namespace costmodel {
 
 DwarfBench::DwarfBench()
     : DataSource(DataSourceConfig{
@@ -161,4 +161,4 @@ std::string DwarfBench::templateToDwarfString(AnalyticalTemplate templ) {
   }
 }
 
-}  // namespace CostModel
+}  // namespace costmodel

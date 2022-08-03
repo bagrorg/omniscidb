@@ -19,7 +19,7 @@
 #include "QueryEngine/CompilationOptions.h"
 #include "QueryEngine/CostModel/Measurements.h"
 
-namespace CostModel {
+namespace costmodel {
 
 class ExtrapolationModel {
  public:
@@ -35,4 +35,4 @@ class ExtrapolationModel {
   std::vector<Detail::Measurement> measurement;
 };
 
-}  // namespace CostModel
+}  // namespace costmodel

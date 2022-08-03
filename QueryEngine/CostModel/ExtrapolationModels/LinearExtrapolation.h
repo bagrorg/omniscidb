@@ -15,7 +15,7 @@
 
 #include "ExtrapolationModel.h"
 
-namespace CostModel {
+namespace costmodel {
 
 class LinearExtrapolation : public ExtrapolationModel {
  public:
@@ -27,4 +27,4 @@ class LinearExtrapolation : public ExtrapolationModel {
   size_t getExtrapolatedData(size_t bytes) override;
 };
 
-}  // namespace CostModel
+}  // namespace costmodel

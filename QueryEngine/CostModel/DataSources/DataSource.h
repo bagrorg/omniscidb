@@ -18,7 +18,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace CostModel {
+namespace costmodel {
 
 struct DataSourceConfig {
   std::string dataSourceName;
@@ -46,4 +46,4 @@ class DataSource {
   std::string dataSourceName;
 };
 
-}  // namespace CostModel
+}  // namespace costmodel

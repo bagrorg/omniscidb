@@ -13,7 +13,7 @@
 
 #include "DataSource.h"
 
-namespace CostModel {
+namespace costmodel {
 
 DataSource::DataSource(const DataSourceConfig& config) : config(config) {}
 
@@ -29,4 +29,4 @@ bool DataSource::isTemplateSupported(AnalyticalTemplate templ) {
   return config.supportedTemplates.find(templ) != config.supportedTemplates.end();
 }
 
-}  // namespace CostModel
+}  // namespace costmodel

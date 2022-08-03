@@ -20,7 +20,7 @@
 
 #include "QueryEngine/CompilationOptions.h"
 
-namespace CostModel {
+namespace costmodel {
 
 // TODO: add templates
 enum AnalyticalTemplate {
@@ -51,4 +51,4 @@ using DeviceMeasurements = std::unordered_map<ExecutorDeviceType, TemplateMeasur
 
 }  // namespace Detail
 
-}  // namespace CostModel
+}  // namespace costmodel

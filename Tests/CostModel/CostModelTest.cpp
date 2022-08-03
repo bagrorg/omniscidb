@@ -17,7 +17,7 @@
 #include "QueryEngine/CostModel/DataSources/DwarfBench.h"
 #include "QueryEngine/CostModel/ExtrapolationModels/LinearExtrapolation.h"
 
-using namespace CostModel;
+using namespace costmodel;
 
 class DataSourceTest : public DataSource {
  public:

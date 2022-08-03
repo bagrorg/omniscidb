@@ -14,15 +14,21 @@
 #pragma once
 
 #include "CostModel.h"
+#include "Shared/Config.h"
 
-namespace CostModel {
+namespace costmodel {
 
 class DummyCostModel : public CostModel {
  public:
-  DummyCostModel(std::unique_ptr<DataSource> _dataSource);
+  DummyCostModel(ExecutorDeviceType dt, const HeterogenousConfig& cfg)
+      : CostModel(nullptr), dt_(dt), cfg_(cfg) {}
 
   std::unique_ptr<policy::ExecutionPolicy> predict(
-      const RaExecutionSequence& queryDag) override;
+      const RelAlgExecutionUnit& queryDag) override;
+
+ private:
+  const ExecutorDeviceType dt_;
+  const HeterogenousConfig& cfg_;
 };
 
-}  // namespace CostModel
+}  // namespace costmodel

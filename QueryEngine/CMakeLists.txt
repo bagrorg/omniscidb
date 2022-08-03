@@ -138,15 +138,13 @@ set(query_engine_source_files
     TableFunctions/TableFunctionManager.h)
 
 
-if (ENABLE_COST_MODEL)
-    list(APPEND query_engine_source_files
-            CostModel/CostModel.cpp
-            CostModel/DataSources/DwarfBench.cpp
-            CostModel/ExtrapolationModels/LinearExtrapolation.cpp
-            CostModel/DummyCostModel.cpp
-            CostModel/DataSources/DataSource.cpp
-            CostModel/Measurements.cpp)
-endif()
+list(APPEND query_engine_source_files
+        CostModel/CostModel.cpp
+        CostModel/DataSources/DwarfBench.cpp
+        CostModel/ExtrapolationModels/LinearExtrapolation.cpp
+        CostModel/DummyCostModel.cpp
+        CostModel/DataSources/DataSource.cpp
+        CostModel/Measurements.cpp)
 
 set(query_engine_cuda_source_files
     TopKSort.cu

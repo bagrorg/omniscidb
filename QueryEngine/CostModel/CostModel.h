@@ -24,7 +24,7 @@
 #include "QueryEngine/Descriptors/RelAlgExecutionDescriptor.h"
 #include "QueryEngine/Dispatchers/ExecutionPolicy.h"
 
-namespace CostModel {
+namespace costmodel {
 
 struct CaibrationConfig {
   std::vector<ExecutorDeviceType> devices;
@@ -41,7 +41,7 @@ class CostModel {
 
   virtual void calibrate(const CaibrationConfig& conf);
   virtual std::unique_ptr<policy::ExecutionPolicy> predict(
-      const RaExecutionSequence& queryDag) = 0;
+      const RelAlgExecutionUnit& queryDag) = 0;
 
  protected:
   std::unique_ptr<DataSource> dataSource;
@@ -63,4 +63,4 @@ class CostModelException : std::runtime_error {
       : std::runtime_error("CostModel exception: " + msg){};
 };
 
-}  // namespace CostModel
+}  // namespace costmodel

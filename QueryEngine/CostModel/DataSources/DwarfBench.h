@@ -21,7 +21,7 @@
 
 #include "DataSource.h"
 
-namespace CostModel {
+namespace costmodel {
 
 // This is a temporary implementation while there is no
 // library for interaction in dwarf bench
@@ -72,4 +72,4 @@ class DwarfBenchException : public std::runtime_error {
       : std::runtime_error("DwarfBench data source exception: " + msg){};
 };
 
-}  // namespace CostModel
+}  // namespace costmodel

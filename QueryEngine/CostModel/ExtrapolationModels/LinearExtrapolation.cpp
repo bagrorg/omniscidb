@@ -15,7 +15,7 @@
 
 #include <algorithm>
 
-namespace CostModel {
+namespace costmodel {
 
 size_t LinearExtrapolation::getExtrapolatedData(size_t bytes) {
   size_t id1, id2;
@@ -41,4 +41,4 @@ size_t LinearExtrapolation::getExtrapolatedData(size_t bytes) {
   return y1 + ((double)bytes - x1) / (x2 - x1) * (y2 - y1);
 }
 
-}  // namespace CostModel
+}  // namespace costmodel

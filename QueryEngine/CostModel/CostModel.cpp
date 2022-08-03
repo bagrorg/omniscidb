@@ -14,7 +14,7 @@
 #include "CostModel.h"
 #include "ExtrapolationModels/LinearExtrapolation.h"
 
-namespace CostModel {
+namespace costmodel {
 
 CostModel::CostModel(std::unique_ptr<DataSource> _dataSource)
     : dataSource(std::move(_dataSource)) {
@@ -66,4 +66,4 @@ const std::vector<AnalyticalTemplate> CostModel::templates = {GroupBy,
                                                               Scan,
                                                               Reduce};
 
-}  // namespace CostModel
+}  // namespace costmodel

@@ -14,17 +14,28 @@
 #include "DummyCostModel.h"
 
 #include "QueryEngine/Dispatchers/DefaultExecutionPolicy.h"
+#include "QueryEngine/Dispatchers/ProportionBasedExecutionPolicy.h"
+#include "QueryEngine/Dispatchers/RRExecutionPolicy.h"
 
-namespace CostModel {
-
-DummyCostModel::DummyCostModel(std::unique_ptr<DataSource> _dataSource)
-    : CostModel(std::move(_dataSource)){};
+namespace costmodel {
 
 std::unique_ptr<policy::ExecutionPolicy> DummyCostModel::predict(
-    const RaExecutionSequence& queryDag) {
-  std::lock_guard<std::mutex> g{latch};
-  return std::make_unique<policy::FragmentIDAssignmentExecutionPolicy>(
-      ExecutorDeviceType::CPU);
+    const RelAlgExecutionUnit& queryDag) {
+  std::unique_ptr<policy::ExecutionPolicy> exe_policy;
+  if (cfg_.enable_heterogeneous_execution) {
+    if (cfg_.forced_heterogeneous_distribution) {
+      std::map<ExecutorDeviceType, unsigned> distribution{
+          {ExecutorDeviceType::CPU, cfg_.forced_cpu_proportion},
+          {ExecutorDeviceType::GPU, cfg_.forced_gpu_proportion}};
+      exe_policy = std::make_unique<policy::ProportionBasedExecutionPolicy>(
+          std::move(distribution));
+    } else {
+      exe_policy = std::make_unique<policy::RoundRobinExecutionPolicy>();
+    }
+  } else {
+    exe_policy = std::make_unique<policy::FragmentIDAssignmentExecutionPolicy>(dt_);
+  }
+  return exe_policy;
 }
 
-}  // namespace CostModel
+}  // namespace costmodel

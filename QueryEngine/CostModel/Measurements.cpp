@@ -1,6 +1,6 @@
 #include "Measurements.h"
 
-namespace CostModel {
+namespace costmodel {
 
 std::string templateToString(AnalyticalTemplate templ) {
   switch (templ) {
@@ -17,4 +17,4 @@ std::string templateToString(AnalyticalTemplate templ) {
   }
 }
 
-}  // namespace CostModel
+}  // namespace costmodel
