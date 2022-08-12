@@ -14,6 +14,7 @@
 #pragma once
 
 #include "CostModel.h"
+#include "DataSources/EmptyDataSource.h"
 #include "Shared/Config.h"
 
 namespace costmodel {
@@ -21,7 +22,7 @@ namespace costmodel {
 class DummyCostModel : public CostModel {
  public:
   DummyCostModel(ExecutorDeviceType dt, const HeterogenousConfig& cfg)
-      : CostModel(nullptr), dt_(dt), cfg_(cfg) {}
+      : CostModel(std::make_unique<EmptyDataSource>()), dt_(dt), cfg_(cfg) {}
 
   std::unique_ptr<policy::ExecutionPolicy> predict(
       const RelAlgExecutionUnit& queryDag) override;
