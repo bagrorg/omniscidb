@@ -141,6 +141,7 @@ set(query_engine_source_files
 list(APPEND query_engine_source_files
         CostModel/CostModel.cpp
         CostModel/DataSources/DwarfBench.cpp
+        CostModel/DataSources/EmptyDataSource.cpp
         CostModel/ExtrapolationModels/LinearExtrapolation.cpp
         CostModel/DummyCostModel.cpp
         CostModel/DataSources/DataSource.cpp
